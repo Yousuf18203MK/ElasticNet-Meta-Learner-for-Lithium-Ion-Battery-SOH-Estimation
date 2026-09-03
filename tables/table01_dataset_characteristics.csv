@@ -1,0 +1,5 @@
+Cell,Chemistry,Rated_Cap_Ah,Discharge_Cycles,SOH_min_%,SOH_max_%,Train_cycles,Meta_cycles,Test_cycles
+B0005,18650 LiCoO₂,2.0,168,69.35,100.0,100,25,26
+B0006,18650 LiCoO₂,2.0,168,56.69,100.0,100,25,26
+B0007,18650 LiCoO₂,2.0,168,74.06,100.0,100,25,26
+B0018,18650 LiCoO₂,2.0,132,72.29,100.0,79,20,20

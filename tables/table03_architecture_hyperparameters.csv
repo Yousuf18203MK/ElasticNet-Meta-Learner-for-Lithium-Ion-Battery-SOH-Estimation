@@ -1,0 +1,8 @@
+Component,Type,Detail,Dropout,Optimizer,LR,Epochs
+GRU,Recurrent NN,"2-layer stacked, 64 units/layer",0.2,Adam,0.001,up to 100 (ES pat=15)
+LSTM,Recurrent NN,"2-layer stacked, 64 units/layer",0.2,Adam,0.001,up to 100 (ES pat=15)
+XGBoost,Gradient Boosting,"300 trees, depth=4, lr=0.05, subsamp=0.8",—,Newton,0.05,300 trees
+Sequence length,Window,32 cycles,—,—,—,—
+XGB lag depth,Causal lags,5 preceding cycles,—,—,—,—
+ElasticNet,Meta-learner,"α=0.05, l1_ratio=0.5",—,—,—,—
+Batch size,Training,16,—,—,—,—

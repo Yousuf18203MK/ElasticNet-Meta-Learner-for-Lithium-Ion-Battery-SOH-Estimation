@@ -1,0 +1,23 @@
+Feature,Description,Unit
+V_mean,Mean discharge voltage,V
+V_std,Std deviation of discharge voltage,V
+V_min,Minimum discharge voltage,V
+V_max,Maximum discharge voltage,V
+V_range,Voltage range (max − min),V
+V_p10,10th-percentile voltage,V
+V_p90,90th-percentile voltage,V
+V_slope,Linear slope of V vs sample index,V/sample
+V_integ,Normalised trapezoidal V integral,V
+I_mean,Mean discharge current,A
+I_std,Std of discharge current,A
+I_min,Minimum discharge current,A
+I_max,Maximum discharge current,A
+T_mean,Mean discharge temperature,°C
+T_std,Std of discharge temperature,°C
+T_rise,Temperature rise within cycle (T_end − T_start),°C
+T_max,Maximum discharge temperature,°C
+T_slope,Linear slope of T vs sample index,°C/sample
+power,Mean discharge power (V × |I|),W
+dur,Number of valid measurement samples,samples
+EXCLUDED: Capacity,Used only to compute SOH target — NEVER a feature,Ah
+EXCLUDED: Cycle,Temporal index — excluded to prevent leakage,—

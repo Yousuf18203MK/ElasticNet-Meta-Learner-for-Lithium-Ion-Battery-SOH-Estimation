@@ -1,0 +1,33 @@
+{
+  "battery": "B0018",
+  "seed": 42,
+  "total_cycles": 132,
+  "seq_len": 32,
+  "n_features": 20,
+  "xgb_n_lags": 5,
+  "partition": {
+    "base": 48,
+    "early": 13,
+    "meta": 20,
+    "test": 20
+  },
+  "meta_learner": "ElasticNet",
+  "en_alpha": 0.05,
+  "en_l1_ratio": 0.5,
+  "en_coefficients": [
+    1.2150909900665283,
+    1.2980058193206787,
+    -1.875493049621582
+  ],
+  "en_intercept": 23.295013427734375,
+  "weighted_weights": {
+    "XGB": 0.21943221041789063,
+    "GRU": 0.4019237736552874,
+    "LSTM": 0.37864401592682195
+  },
+  "base_meta_rmse": {
+    "XGB": 3.3475639820098877,
+    "GRU": 1.8276185989379883,
+    "LSTM": 1.9399840831756592
+  }
+}

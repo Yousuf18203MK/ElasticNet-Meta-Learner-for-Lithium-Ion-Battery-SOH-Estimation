@@ -1,0 +1,6 @@
+Study,Architecture,RMSE,MAPE_pct,Seeds,Note
+This work,GRU+LSTM+XGB → EN Stack,1.084,1.34,3,"Leakage-free, 3 seeds"
+Zhang et al. 2022 (J.Energy Storage),GRU,~1.5–2.0,~1.8,1,Single seed
+Li et al. 2023 (Applied Energy),BiLSTM Stacking,~0.8–1.3,~1.0–1.5,1,Leakage unclear
+Chen et al. 2022 (Energy AI),CNN-LSTM,~1.1–1.8,~1.2–2.0,1,Split details unclear
+Wang et al. 2023 (IEEE TIE),Transformer,~0.9–1.4,~1.1,1,"Large model, small data"
