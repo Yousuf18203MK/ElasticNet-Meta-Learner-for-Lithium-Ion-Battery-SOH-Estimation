@@ -1,6 +1,3 @@
-Below is a publication oriented `README.md` based directly on the revised manuscript and the project structure you provided. I have used the manuscript values as the authoritative results, including the distinction between within battery and LOO performance. 
-
-````markdown
 # ElasticNet Meta Learner for Lithium Ion Battery SOH Estimation
 
 ## Heterogeneous Stacking Ensemble with ElasticNet Meta Learner for Lithium Ion Battery State of Health Estimation
