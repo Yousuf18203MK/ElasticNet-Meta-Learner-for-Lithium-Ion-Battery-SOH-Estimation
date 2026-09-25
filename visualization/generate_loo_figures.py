@@ -1,171 +1,896 @@
-"""
-generate_loo_figures.py — Publication figures for the LOO experiment.
-Run from project root: python visualization/generate_loo_figures.py
-"""
-import sys, os, warnings, pickle
-from pathlib import Path
-_SCRIPT_DIR  = Path(__file__).resolve().parent
-PROJECT_ROOT = _SCRIPT_DIR.parent
-if str(PROJECT_ROOT) not in sys.path: sys.path.insert(0, str(PROJECT_ROOT))
-warnings.filterwarnings("ignore"); os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-import numpy as np, pandas as pd
-import matplotlib; matplotlib.use("Agg")
-import matplotlib.pyplot as plt, matplotlib.gridspec as GS
+
+from pathlib import Path
+import pickle
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
 from config import RESULTS_DIR, FIGURES_DIR, BATTERIES
 from src.feature_engineering import extract_rich_features
 
-CELLS = list(BATTERIES.keys()); SEEDS = [42, 123, 2024]
-PAL   = {"B0005":"#2166ac","B0006":"#d6604d","B0007":"#1a9850","B0018":"#7b2d8b"}
-MCLR  = {"GRU":"#4d9de0","LSTM":"#3bb273","XGB":"#d01c8b","Weighted":"#8073ac",
-          "Stack_LR":"#e08214","Stack_Ridge":"#35978f","Stack_EN":"#bf5b17"}
-plt.rcParams.update({"font.family":"serif","font.size":10.5,"axes.titlesize":11.5,
-    "axes.labelsize":10.5,"xtick.labelsize":9.5,"ytick.labelsize":9.5,"legend.fontsize":9,
-    "figure.dpi":150,"savefig.dpi":300,"savefig.bbox":"tight",
-    "axes.spines.top":False,"axes.spines.right":False,"axes.grid":True,
-    "grid.alpha":0.22,"grid.linestyle":"--","lines.linewidth":1.7})
+warnings.filterwarnings("ignore")
 
-LOO_DIR  = RESULTS_DIR/"loo"; FIGS_LOO = FIGURES_DIR/"loo"; FIGS_LOO.mkdir(exist_ok=True)
-def save(fig,nm): fig.savefig(str(FIGS_LOO/nm),dpi=300); plt.close(fig); print(f"  {nm}")
+CELLS = list(BATTERIES.keys())
+LOO_DIR = RESULTS_DIR / "loo"
+SEEDS = [42, 123, 2024]
+
+PALETTE = {
+    "B0005": "#2166ac",
+    "B0006": "#d6604d",
+    "B0007": "#1a9850",
+    "B0018": "#7b2d8b",
+}
+
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.size": 10.5,
+    "axes.titlesize": 11.5,
+    "axes.labelsize": 10.5,
+    "xtick.labelsize": 9.5,
+    "ytick.labelsize": 9.5,
+    "legend.fontsize": 8.5,
+    "figure.dpi": 150,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.grid": True,
+    "grid.alpha": 0.22,
+    "grid.linestyle": "--",
+})
+
+
+def save(fig, name):
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    path = FIGURES_DIR / name
+    fig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"Saved {name}")
+
+
+def find_column(df, candidates, required=True):
+    normalized = {
+        str(c).strip().lower().replace(" ", "").replace("-", "").replace("_", ""): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+        key = candidate.strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+        if key in normalized:
+            return normalized[key]
+
+    if required:
+        raise ValueError(
+            "Could not identify required column. "
+            f"Tried: {candidates}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    return None
+
+
+def normalize_prediction_frame(df):
+    """
+    Convert different LOO prediction schemas into one internal schema.
+
+    Required internal columns:
+        Cycle
+        Actual
+        GRU
+        LSTM
+        XGB
+        Weighted
+        Stack_LR
+        Stack_Ridge
+        Stack_EN
+    """
+
+    cycle = find_column(
+        df,
+        ["Cycle", "cycle", "Discharge_Cycle", "discharge_cycle", "index"]
+    )
+
+    actual = find_column(
+        df,
+        [
+            "Actual_SOH",
+            "actual_soh",
+            "Actual",
+            "actual",
+            "SOH",
+            "soh",
+            "y_true",
+            "target",
+        ]
+    )
+
+    output = pd.DataFrame()
+    output["Cycle"] = pd.to_numeric(df[cycle], errors="coerce")
+    output["Actual"] = pd.to_numeric(df[actual], errors="coerce")
+
+    model_candidates = {
+        "GRU": ["GRU", "GRU_Pred", "GRU_Prediction", "gru_prediction"],
+        "LSTM": ["LSTM", "LSTM_Pred", "LSTM_Prediction", "lstm_prediction"],
+        "XGB": [
+            "XGB",
+            "XGBoost",
+            "XGB_Pred",
+            "XGB_Prediction",
+            "xgb_prediction",
+        ],
+        "Weighted": [
+            "Weighted",
+            "Weighted_Ensemble",
+            "Weighted_Pred",
+            "Weighted_Prediction",
+        ],
+        "Stack_LR": [
+            "Stack_LR",
+            "StackLR",
+            "Stack_LR_Pred",
+            "Stack_LR_Prediction",
+        ],
+        "Stack_Ridge": [
+            "Stack_Ridge",
+            "StackRidge",
+            "Stack_Ridge_Pred",
+            "Stack_Ridge_Prediction",
+        ],
+        "Stack_EN": [
+            "Stack_EN",
+            "Stack_EN_Pred",
+            "Stack_EN_Prediction",
+            "ElasticNet",
+            "ElasticNet_Pred",
+            "EN",
+            "EN_Pred",
+            "Prediction",
+        ],
+    }
+
+    for internal, candidates in model_candidates.items():
+        col = find_column(df, candidates, required=False)
+
+        if col is not None:
+            output[internal] = pd.to_numeric(
+                df[col], errors="coerce"
+            )
+
+    required_models = ["GRU", "LSTM", "XGB", "Stack_EN"]
+
+    missing = [m for m in required_models if m not in output.columns]
+
+    if missing:
+        raise ValueError(
+            "LOO prediction file does not contain the required model columns: "
+            f"{missing}. "
+            f"Available columns are: {list(df.columns)}"
+        )
+
+    output = output.dropna(subset=["Cycle", "Actual", "Stack_EN"])
+    output = output.sort_values("Cycle").reset_index(drop=True)
+
+    return output
+
+
+def load_loo_prediction_files():
+    """
+    Load LOO predictions from CSV files.
+
+    The function first looks for the conventional per battery files.
+    It then falls back to a combined CSV if available.
+    """
+
+    predictions = {}
+
+    for battery in CELLS:
+        candidates = [
+            LOO_DIR / f"{battery}_loo_predictions_s42.csv",
+            LOO_DIR / f"{battery}_predictions_s42.csv",
+            LOO_DIR / f"{battery}_loo_s42.csv",
+        ]
+
+        found = next((p for p in candidates if p.exists()), None)
+
+        if found is not None:
+            raw = pd.read_csv(found)
+            predictions[battery] = normalize_prediction_frame(raw)
+            print(f"Loaded {found.name}")
+            continue
+
+    if len(predictions) == len(CELLS):
+        return predictions
+
+    pickle_candidates = [
+        LOO_DIR / "loo_preds_s42.pkl",
+        LOO_DIR / "loo_predictions_s42.pkl",
+    ]
+
+    pickle_path = next(
+        (p for p in pickle_candidates if p.exists()),
+        None
+    )
+
+    if pickle_path is not None:
+        with open(pickle_path, "rb") as f:
+            obj = pickle.load(f)
+
+        for battery in CELLS:
+            if battery not in obj:
+                continue
+
+            value = obj[battery]
+
+            if isinstance(value, pd.DataFrame):
+                raw = value
+            else:
+                raw = pd.DataFrame(value)
+
+            predictions[battery] = normalize_prediction_frame(raw)
+
+    if len(predictions) != len(CELLS):
+        missing = [b for b in CELLS if b not in predictions]
+
+        raise FileNotFoundError(
+            "Could not load LOO predictions for: "
+            f"{missing}. "
+            "Expected per battery CSV files or loo_preds_s42.pkl."
+        )
+
+    return predictions
+
+
+def load_loo_tables():
+    raw_path = LOO_DIR / "loo_results_raw.csv"
+    summary_path = LOO_DIR / "loo_summary_per_battery.csv"
+    overall_path = LOO_DIR / "loo_overall.csv"
+
+    for path in [raw_path, summary_path, overall_path]:
+        if not path.exists():
+            raise FileNotFoundError(f"Missing LOO result file: {path}")
+
+    return (
+        pd.read_csv(raw_path),
+        pd.read_csv(summary_path),
+        pd.read_csv(overall_path),
+    )
+
+
+def load_rich_features():
+    rich = {}
+
+    for battery in CELLS:
+        rich_path = RESULTS_DIR / f"{battery}_rich.csv"
+
+        if rich_path.exists():
+            rich[battery] = pd.read_csv(rich_path)
+            continue
+
+        mat_path = Path(
+            __file__
+        ).resolve().parents[1] / "data" / BATTERIES[battery]
+
+        if mat_path.exists():
+            rich[battery] = extract_rich_features(mat_path, battery)
+
+    return rich
+
+
+def add_panel_label(ax, label):
+    ax.text(
+        0.015,
+        0.965,
+        f"({label})",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+
+def figure_1_loo_overall(predictions):
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    axes = axes.flatten()
+
+    for ax, battery in zip(axes, CELLS):
+        p = predictions[battery]
+
+        ax.plot(
+            p.Cycle,
+            p.Actual,
+            color="black",
+            linewidth=2.3,
+            label="Actual LOO test SOH",
+        )
+
+        ax.plot(
+            p.Cycle,
+            p.GRU,
+            "--",
+            color="#2166ac",
+            linewidth=1.3,
+            label="GRU",
+        )
+
+        ax.plot(
+            p.Cycle,
+            p.LSTM,
+            "--",
+            color="#4dac26",
+            linewidth=1.3,
+            label="LSTM",
+        )
+
+        ax.plot(
+            p.Cycle,
+            p.XGB,
+            ":",
+            color="#d01c8b",
+            linewidth=1.4,
+            label="XGBoost",
+        )
+
+        ax.plot(
+            p.Cycle,
+            p.Stack_EN,
+            color="#bf5b17",
+            linewidth=2.2,
+            label="Stack ElasticNet",
+        )
+
+        rmse = np.sqrt(
+            np.mean((p.Actual.values - p.Stack_EN.values) ** 2)
+        )
+
+        ax.set_title(
+            f"{battery} | LOO RMSE = {rmse:.3f}",
+            fontweight="bold",
+        )
+
+        ax.set_xlabel("Discharge cycle")
+        ax.set_ylabel("SOH (%)")
+
+    add_panel_label(axes[0], "a")
+    add_panel_label(axes[1], "b")
+    add_panel_label(axes[2], "c")
+    add_panel_label(axes[3], "d")
+
+    axes[0].legend(
+        loc="lower left",
+        ncol=2,
+        fontsize=7.6,
+        framealpha=0.9,
+    )
+
+    fig.suptitle(
+        "Figure 1. Leave One Battery Out actual versus predicted SOH",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig01_actual_vs_predicted.png")
+
+
+def figure_2_model_comparison(loo_overall):
+    models = [
+        "GRU",
+        "LSTM",
+        "XGB",
+        "Weighted",
+        "Stack_LR",
+        "Stack_Ridge",
+        "Stack_EN",
+    ]
+
+    labels = [
+        "GRU",
+        "LSTM",
+        "XGBoost",
+        "Weighted\nensemble",
+        "Stack LR",
+        "Stack Ridge",
+        "Stack ElasticNet",
+    ]
+
+    values = []
+
+    for model in models:
+        row = loo_overall[
+            loo_overall["Model"].astype(str).str.strip() == model
+        ]
+
+        values.append(
+            float(row["RMSE_mean"].iloc[0])
+            if len(row)
+            else np.nan
+        )
+
+    fig, ax = plt.subplots(figsize=(10, 5.7))
+
+    bars = ax.bar(
+        labels,
+        values,
+        color=[
+            "#4d9de0",
+            "#3bb273",
+            "#d01c8b",
+            "#8073ac",
+            "#e08214",
+            "#35978f",
+            "#bf5b17",
+        ],
+        alpha=0.86,
+        edgecolor="white",
+    )
+
+    for bar, value in zip(bars, values):
+        if np.isfinite(value):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                value + 0.06,
+                f"{value:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=8.8,
+                fontweight="bold",
+            )
+
+    ax.set_ylabel("Mean RMSE, SOH percentage points")
+    ax.set_xlabel("Model or ensemble configuration")
+    ax.set_title(
+        "Figure 2. Cross battery LOO model comparison",
+        fontweight="bold",
+    )
+
+    ax.text(
+        0.01,
+        0.97,
+        "Bars represent mean RMSE across four held out batteries and three seeds",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=8.5,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.86,
+            edgecolor="none",
+        ),
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig02_model_comparison.png")
+
+
+def figure_3_battery_comparison(loo_summary):
+    fig, ax = plt.subplots(figsize=(9, 5.7))
+
+    x = np.arange(len(CELLS))
+    width = 0.24
+
+    for idx, model in enumerate(["GRU", "LSTM", "Weighted", "Stack_EN"]):
+        values = []
+
+        for battery in CELLS:
+            rows = loo_summary[
+                (loo_summary["Test_Battery"] == battery)
+                & (loo_summary["Model"] == model)
+            ]
+
+            values.append(
+                float(rows["RMSE_mean"].iloc[0])
+                if len(rows)
+                else np.nan
+            )
+
+        ax.bar(
+            x + (idx - 1.5) * width,
+            values,
+            width,
+            label=model,
+            alpha=0.86,
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(CELLS)
+    ax.set_xlabel("Held out battery")
+    ax.set_ylabel("Mean RMSE, SOH percentage points")
+    ax.set_title(
+        "Figure 3. LOO RMSE by held out battery",
+        fontweight="bold",
+    )
+
+    ax.legend(
+        title="Model",
+        fontsize=8.5,
+        framealpha=0.9,
+    )
+
+    ax.text(
+        0.01,
+        0.97,
+        "Each bar summarizes the three evaluation seeds",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=8.5,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.86,
+            edgecolor="none",
+        ),
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig03_rmse_by_battery.png")
+
+
+def figure_4_b0006_diagnostic(predictions, loo_raw):
+    battery = "B0006"
+    p = predictions[battery]
+
+    sub = loo_raw[
+        loo_raw["Test_Battery"] == battery
+    ].copy()
+
+    fig = plt.figure(figsize=(12, 8))
+
+    gs = gridspec.GridSpec(
+        2,
+        2,
+        figure=fig,
+        height_ratios=[1.15, 1],
+        hspace=0.42,
+        wspace=0.34,
+    )
+
+    ax0 = fig.add_subplot(gs[0, :])
+
+    ax0.plot(
+        p.Cycle,
+        p.Actual,
+        color="#d6604d",
+        linewidth=2.4,
+        label="Actual LOO test SOH",
+    )
+
+    ax0.plot(
+        p.Cycle,
+        p.Stack_EN,
+        color="#bf5b17",
+        linewidth=2.2,
+        label="Stack ElasticNet",
+    )
+
+    ax0.plot(
+        p.Cycle,
+        p.GRU,
+        "--",
+        color="#2166ac",
+        linewidth=1.3,
+        label="GRU",
+    )
+
+    ax0.plot(
+        p.Cycle,
+        p.LSTM,
+        "--",
+        color="#4dac26",
+        linewidth=1.3,
+        label="LSTM",
+    )
+
+    rmse = np.sqrt(
+        np.mean((p.Actual.values - p.Stack_EN.values) ** 2)
+    )
+
+    ax0.set_title(
+        f"B0006 LOO, seed 42 | Stack ElasticNet RMSE = {rmse:.3f}",
+        fontweight="bold",
+    )
+
+    ax0.set_xlabel("Discharge cycle")
+    ax0.set_ylabel("SOH (%)")
+    ax0.legend(
+        ncol=2,
+        fontsize=8,
+        framealpha=0.9,
+    )
+
+    add_panel_label(ax0, "a")
+
+    ax1 = fig.add_subplot(gs[1, 0])
+
+    ax1.bar(
+        sub["Seed"].astype(str),
+        sub["Stack_EN_RMSE"],
+        color="#d6604d",
+        alpha=0.85,
+        edgecolor="white",
+    )
+
+    mean_value = float(sub["Stack_EN_RMSE"].mean())
+    std_value = float(sub["Stack_EN_RMSE"].std(ddof=1))
+
+    ax1.axhline(
+        mean_value,
+        color="black",
+        linestyle="--",
+        linewidth=1.4,
+        label=f"Three seed mean = {mean_value:.3f}",
+    )
+
+    ax1.set_xlabel("Evaluation seed")
+    ax1.set_ylabel("RMSE, SOH %")
+    ax1.set_title(
+        "B0006 seed stability",
+        fontweight="bold",
+    )
+
+    ax1.text(
+        0.03,
+        0.93,
+        f"Bars: Stack ElasticNet RMSE\n"
+        f"SD across seeds = {std_value:.3f}",
+        transform=ax1.transAxes,
+        va="top",
+        fontsize=8,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.88,
+            edgecolor="none",
+        ),
+    )
+
+    ax1.legend(fontsize=7.8)
+    add_panel_label(ax1, "b")
+
+    ax2 = fig.add_subplot(gs[1, 1])
+
+    residual = p.Stack_EN.values - p.Actual.values
+
+    ax2.scatter(
+        p.Actual,
+        residual,
+        color="#d6604d",
+        s=32,
+        alpha=0.76,
+    )
+
+    ax2.axhline(
+        0,
+        color="black",
+        linestyle="--",
+        linewidth=1.3,
+        label="Zero residual",
+    )
+
+    ax2.set_xlabel("Actual SOH (%)")
+    ax2.set_ylabel("Residual, predicted minus actual SOH (%)")
+    ax2.set_title(
+        "B0006 residual versus actual SOH",
+        fontweight="bold",
+    )
+
+    ax2.legend(fontsize=7.8)
+    add_panel_label(ax2, "c")
+
+    fig.suptitle(
+        "Figure 4. B0006 LOO diagnostic",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig04_b0006_diagnostic.png")
+
+
+def figure_5_b0018_diagnostic(predictions, loo_raw):
+    battery = "B0018"
+    p = predictions[battery]
+
+    sub = loo_raw[
+        loo_raw["Test_Battery"] == battery
+    ].copy()
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(11, 4.8),
+    )
+
+    axes[0].plot(
+        p.Cycle,
+        p.Actual,
+        color="#7b2d8b",
+        linewidth=2.4,
+        label="Actual LOO test SOH",
+    )
+
+    axes[0].plot(
+        p.Cycle,
+        p.Stack_EN,
+        color="#bf5b17",
+        linewidth=2.2,
+        label="Stack ElasticNet",
+    )
+
+    axes[0].plot(
+        p.Cycle,
+        p.GRU,
+        "--",
+        color="#2166ac",
+        linewidth=1.3,
+        label="GRU",
+    )
+
+    axes[0].plot(
+        p.Cycle,
+        p.LSTM,
+        "--",
+        color="#4dac26",
+        linewidth=1.3,
+        label="LSTM",
+    )
+
+    axes[0].set_xlabel("Discharge cycle")
+    axes[0].set_ylabel("SOH (%)")
+    axes[0].set_title(
+        "B0018 LOO prediction trajectory",
+        fontweight="bold",
+    )
+    axes[0].legend(fontsize=7.8)
+    add_panel_label(axes[0], "a")
+
+    axes[1].bar(
+        sub["Seed"].astype(str),
+        sub["Stack_EN_RMSE"],
+        color="#7b2d8b",
+        alpha=0.85,
+        edgecolor="white",
+    )
+
+    mean_value = float(sub["Stack_EN_RMSE"].mean())
+    std_value = float(sub["Stack_EN_RMSE"].std(ddof=1))
+
+    axes[1].axhline(
+        mean_value,
+        color="black",
+        linestyle="--",
+        linewidth=1.4,
+        label=f"Three seed mean = {mean_value:.3f}",
+    )
+
+    axes[1].set_xlabel("Evaluation seed")
+    axes[1].set_ylabel("RMSE, SOH %")
+    axes[1].set_title(
+        "B0018 seed stability",
+        fontweight="bold",
+    )
+
+    axes[1].text(
+        0.03,
+        0.93,
+        f"Bars: Stack ElasticNet RMSE\n"
+        f"SD across seeds = {std_value:.3f}",
+        transform=axes[1].transAxes,
+        va="top",
+        fontsize=8,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.88,
+            edgecolor="none",
+        ),
+    )
+
+    axes[1].legend(fontsize=7.8)
+    add_panel_label(axes[1], "b")
+
+    fig.suptitle(
+        "Figure 5. B0018 LOO diagnostic",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig05_b0018_diagnostic.png")
+
+
+def figure_6_residual_distributions(predictions):
+    fig, axes = plt.subplots(
+        1,
+        4,
+        figsize=(13, 4.5),
+    )
+
+    for ax, battery in zip(axes, CELLS):
+        p = predictions[battery]
+
+        residual = p.Stack_EN.values - p.Actual.values
+
+        mean_value = float(np.mean(residual))
+        std_value = float(np.std(residual, ddof=1))
+
+        ax.hist(
+            residual,
+            bins=10,
+            color=PALETTE[battery],
+            alpha=0.82,
+            edgecolor="white",
+        )
+
+        ax.axvline(
+            0,
+            color="black",
+            linestyle="--",
+            linewidth=1.3,
+            label="Zero residual",
+        )
+
+        ax.axvline(
+            mean_value,
+            color="red",
+            linewidth=1.4,
+            label=f"Mean = {mean_value:.3f}",
+        )
+
+        ax.set_title(
+            f"{battery} | SD = {std_value:.3f}",
+            fontweight="bold",
+        )
+
+        ax.set_xlabel(
+            "Residual, predicted minus actual SOH (%)"
+        )
+
+        if battery == CELLS[0]:
+            ax.set_ylabel("Count")
+
+        ax.legend(
+            fontsize=7.4,
+            framealpha=0.88,
+        )
+
+    fig.suptitle(
+        "Figure 6. LOO residual distributions for Stack ElasticNet",
+        fontsize=12,
+        fontweight="bold",
+    )
+
+    plt.tight_layout()
+    save(fig, "loo_fig06_residual_distributions.png")
+
 
 def main():
-    print("="*60+"\n  Generating LOO figures …\n"+"="*60)
-    req = LOO_DIR/"loo_results_raw.csv"
-    if not req.exists(): raise FileNotFoundError(f"{req}\nRun experiments/run_loo_experiment.py first.")
+    print("=" * 70)
+    print("Generating complete LOO manuscript figure set")
+    print("=" * 70)
 
-    loo_full = pd.read_csv(str(LOO_DIR/"loo_results_raw.csv"))
-    loo_smry = pd.read_csv(str(LOO_DIR/"loo_summary_per_battery.csv"))
-    loo_ovrl = pd.read_csv(str(LOO_DIR/"loo_overall.csv"))
-    with open(str(LOO_DIR/"loo_preds_s42.pkl"),"rb") as f: preds=pickle.load(f)
-    within   = pd.read_csv(str(RESULTS_DIR/"final_results_raw.csv"))
+    predictions = load_loo_prediction_files()
+    loo_raw, loo_summary, loo_overall = load_loo_tables()
 
-    rich = {}
-    for bid in CELLS:
-        rp = RESULTS_DIR/f"{bid}_rich.csv"
-        rich[bid] = pd.read_csv(str(rp)) if rp.exists() else extract_rich_features(RESULTS_DIR.parent/"data"/BATTERIES[bid],bid)
+    print(
+        f"Loaded LOO predictions for: {', '.join(predictions.keys())}"
+    )
 
-    MODS_SHOW = ["GRU","LSTM","XGB","Weighted","Stack_Ridge","Stack_EN"]
-    NICE_S    = ["GRU","LSTM","XGB","Weighted","Stack\n(Ridge)","Stack\n(EN)"]
+    figure_1_loo_overall(predictions)
+    figure_2_model_comparison(loo_overall)
+    figure_3_battery_comparison(loo_summary)
+    figure_4_b0006_diagnostic(predictions, loo_raw)
+    figure_5_b0018_diagnostic(predictions, loo_raw)
+    figure_6_residual_distributions(predictions)
 
-    # FIG L1: actual vs predicted
-    fig,axes=plt.subplots(2,2,figsize=(11,8)); axes=axes.flatten()
-    for ax,bid in zip(axes,CELLS):
-        p=preds[bid]; cyc=p.Cycle.values; act=p.Actual_SOH.values; en=p.Stack_EN.values
-        ax.plot(rich[bid].Cycle,rich[bid].SOH,"-",color="lightgrey",lw=1,zorder=1,label="Full SOH")
-        ax.plot(cyc,act,"k-",lw=2.4,label="Actual (LOO test)",zorder=5)
-        ax.plot(cyc,p.GRU.values,"--",color="#2166ac",lw=1.3,alpha=.7,label="GRU")
-        ax.plot(cyc,p.LSTM.values,"--",color="#4dac26",lw=1.3,alpha=.7,label="LSTM")
-        ax.plot(cyc,en,"-",color="#bf5b17",lw=2.2,label="EN Stack")
-        ax.set_title(f"{bid} — LOO RMSE={float(np.sqrt(np.mean((act-en)**2))):.4f}%",fontweight="bold")
-        ax.set_xlabel("Discharge cycle"); ax.set_ylabel("SOH (%)")
-    axes[0].legend(fontsize=7.5,loc="lower left",framealpha=.85,ncol=3)
-    fig.suptitle("Fig. L1 — LOO: Actual vs Predicted SOH (seed=42)\nModel trained on 3 cells, evaluated on 4th",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL01_loo_actual_vs_predicted.png")
+    print("=" * 70)
+    print(
+        f"Complete LOO figure set saved to: {FIGURES_DIR}"
+    )
+    print("=" * 70)
 
-    # FIG L2: per-battery RMSE bars
-    x=np.arange(len(MODS_SHOW)); w=0.19
-    fig,ax=plt.subplots(figsize=(12,5.5))
-    for i,(bid,clr) in enumerate(PAL.items()):
-        vals=[float(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model==m)].RMSE_mean.values[0])
-              if len(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model==m)])>0 else 0 for m in MODS_SHOW]
-        errs=[float(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model==m)].RMSE_std.values[0])
-              if len(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model==m)])>0 else 0 for m in MODS_SHOW]
-        ax.bar(x+i*w,vals,w,label=bid,color=clr,alpha=.85,yerr=errs,capsize=3,error_kw={"elinewidth":1.2})
-    ax.set_xticks(x+1.5*w); ax.set_xticklabels(NICE_S,fontsize=10)
-    ax.set_ylabel("RMSE (SOH %)"); ax.set_title("Fig. L2 — LOO RMSE per Held-Out Battery (mean±std, 3 seeds)",fontweight="bold")
-    ax.legend(ncol=4,fontsize=9,loc="upper right",framealpha=.85)
-    plt.tight_layout(); save(fig,"figL02_loo_rmse_per_battery.png")
-
-    # FIG L3: within vs LOO comparison
-    fig,axes=plt.subplots(1,2,figsize=(13,5.5))
-    wb_data={m:within[f"{m}_RMSE"].mean() for m in MODS_SHOW if f"{m}_RMSE" in within.columns}
-    loo_data={m:float(loo_ovrl[loo_ovrl.Model==m].RMSE_mean.values[0]) for m in MODS_SHOW if len(loo_ovrl[loo_ovrl.Model==m])>0}
-    x2=np.arange(len(MODS_SHOW)); w2=0.35
-    axes[0].bar(x2-w2/2,[wb_data.get(m,0) for m in MODS_SHOW],w2,label="Within-Battery",color=[MCLR.get(m,"grey") for m in MODS_SHOW],alpha=.85)
-    axes[0].bar(x2+w2/2,[loo_data.get(m,0) for m in MODS_SHOW],w2,label="LOO",color=[MCLR.get(m,"grey") for m in MODS_SHOW],alpha=.40,hatch="////",edgecolor="grey",lw=.5)
-    axes[0].set_xticks(x2); axes[0].set_xticklabels(NICE_S,fontsize=9.5)
-    axes[0].set_ylabel("Mean RMSE (SOH %)"); axes[0].set_title("Within-Battery vs LOO\n(mean, all cells, 3 seeds)",fontweight="bold"); axes[0].legend(fontsize=9.5)
-    wb_per=within.groupby("Battery")["Stack_EN_RMSE"].mean()
-    loo_per={bid:float(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model=="Stack_EN")].RMSE_mean.values[0])
-             if len(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model=="Stack_EN")])>0 else 0 for bid in CELLS}
-    x3=np.arange(4); w3=0.35
-    axes[1].bar(x3-w3/2,[wb_per[b] for b in CELLS],w3,color=[PAL[b] for b in CELLS],alpha=.85,label="Within-Battery")
-    axes[1].bar(x3+w3/2,[loo_per[b] for b in CELLS],w3,color=[PAL[b] for b in CELLS],alpha=.40,hatch="////",edgecolor="grey",lw=.5,label="LOO")
-    axes[1].set_xticks(x3); axes[1].set_xticklabels(CELLS); axes[1].set_ylabel("RMSE (SOH %)")
-    axes[1].set_title("Stack EN: Within-Battery vs LOO\n(mean, 3 seeds)",fontweight="bold"); axes[1].legend(fontsize=9.5)
-    fig.suptitle("Fig. L3 — Within-Battery vs Leave-One-Out Performance Comparison",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL03_within_vs_loo.png")
-
-    # FIG L4: seed stability
-    fig,axes=plt.subplots(1,4,figsize=(13,4.5))
-    for ax,bid in zip(axes,CELLS):
-        sub=loo_full[loo_full.Test_Battery==bid]; sv=sub.Stack_EN_RMSE.values
-        ax.bar([str(s) for s in SEEDS],sv,color=PAL[bid],alpha=.85,edgecolor="white")
-        ax.axhline(y=float(sv.mean()),color="k",lw=1.5,ls="--",label=f"μ={sv.mean():.3f}")
-        ax.set_title(f"{bid}",fontweight="bold"); ax.set_xlabel("Seed"); ax.set_ylabel("EN RMSE" if bid==CELLS[0] else ""); ax.legend(fontsize=8.5)
-    fig.suptitle("Fig. L4 — LOO Seed Stability: GRU+LSTM+XGB EN Stack",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL04_loo_seed_stability.png")
-
-    # FIG L5: residual histograms
-    fig,axes=plt.subplots(1,4,figsize=(13,4.5))
-    for ax,bid in zip(axes,CELLS):
-        p=preds[bid]; res=p.Stack_EN.values-p.Actual_SOH.values
-        ax.hist(res,bins=10,color=PAL[bid],alpha=.82,edgecolor="white")
-        ax.axvline(x=0,color="k",lw=1.5,ls="--"); ax.axvline(x=float(res.mean()),color="red",lw=1.5,label=f"μ={res.mean():.3f}")
-        ax.set_title(f"{bid}",fontweight="bold"); ax.set_xlabel("Residual (SOH %)")
-        if bid==CELLS[0]: ax.set_ylabel("Count"); ax.legend(fontsize=8)
-    fig.suptitle("Fig. L5 — LOO Residual Distributions (seed=42)",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL05_loo_residual_hist.png")
-
-    # FIG L6: B0006 diagnostic
-    fig=plt.figure(figsize=(12,8)); gs=GS.GridSpec(2,2,figure=fig,hspace=.4,wspace=.35)
-    p6=preds["B0006"]; df6=rich["B0006"]
-    ax0=fig.add_subplot(gs[0,:])
-    ax0.plot(df6.Cycle,df6.SOH,"#d6604d",lw=2.0,alpha=.4,label="Full SOH")
-    ax0.plot(p6.Cycle,p6.Actual_SOH,"#d6604d",lw=2.4,label="Actual (LOO)")
-    ax0.plot(p6.Cycle,p6.Stack_EN,"#bf5b17",lw=2.2,label=f"EN Stack (RMSE={float(np.sqrt(np.mean((p6.Actual_SOH-p6.Stack_EN)**2))):.4f})")
-    ax0.plot(p6.Cycle,p6.GRU,"--",color="#2166ac",lw=1.3,alpha=.7,label="GRU"); ax0.plot(p6.Cycle,p6.LSTM,"--",color="#4dac26",lw=1.3,alpha=.7,label="LSTM")
-    ax0.set_xlabel("Discharge cycle"); ax0.set_ylabel("SOH (%)"); ax0.set_title("B0006 LOO (seed=42) — Training: B0005+B0007+B0018",fontweight="bold"); ax0.legend(fontsize=8,ncol=3)
-    ax1=fig.add_subplot(gs[1,0]); sub6=loo_full[loo_full.Test_Battery=="B0006"]
-    ax1.bar([str(s) for s in SEEDS],sub6.Stack_EN_RMSE.values,color="#d6604d",alpha=.85,edgecolor="white")
-    ax1.axhline(y=sub6.Stack_EN_RMSE.mean(),color="k",lw=1.5,ls="--",label=f"μ={sub6.Stack_EN_RMSE.mean():.3f}"); ax1.set_xlabel("Seed"); ax1.set_ylabel("RMSE"); ax1.set_title("B0006 LOO Seed Stability",fontweight="bold"); ax1.legend(fontsize=9)
-    ax2=fig.add_subplot(gs[1,1]); res6=p6.Stack_EN.values-p6.Actual_SOH.values
-    ax2.scatter(p6.Actual_SOH,res6,color="#d6604d",s=35,alpha=.8); ax2.axhline(y=0,color="k",lw=1.2,ls="--")
-    ax2.set_xlabel("Actual SOH (%)"); ax2.set_ylabel("Residual (SOH %)"); ax2.set_title("B0006 Residual vs Actual SOH",fontweight="bold")
-    fig.suptitle("Fig. L6 — B0006 LOO Diagnostic (most challenging cell for cross-battery generalization)",fontsize=11,fontweight="bold"); save(fig,"figL06_b0006_loo_diagnostic.png")
-
-    # FIG L7: B0018 diagnostic
-    fig,axes=plt.subplots(1,2,figsize=(11,4.5)); p18=preds["B0018"]; df18=rich["B0018"]
-    axes[0].plot(df18.Cycle,df18.SOH,"#7b2d8b",lw=2.0,alpha=.4,label="Full SOH")
-    axes[0].plot(p18.Cycle,p18.Actual_SOH,"#7b2d8b",lw=2.4,label="Actual (LOO)")
-    axes[0].plot(p18.Cycle,p18.Stack_EN,"#bf5b17",lw=2.2,label=f"EN Stack (RMSE={float(np.sqrt(np.mean((p18.Actual_SOH-p18.Stack_EN)**2))):.4f})")
-    axes[0].plot(p18.Cycle,p18.GRU,"--",color="#2166ac",lw=1.3,alpha=.7,label="GRU")
-    axes[0].set_xlabel("Discharge cycle"); axes[0].set_ylabel("SOH (%)"); axes[0].set_title("B0018 LOO (seed=42)\nTraining: B0005+B0006+B0007",fontweight="bold"); axes[0].legend(fontsize=8.5)
-    sub18=loo_full[loo_full.Test_Battery=="B0018"]
-    axes[1].bar([str(s) for s in SEEDS],sub18.Stack_EN_RMSE.values,color="#7b2d8b",alpha=.85,edgecolor="white")
-    axes[1].axhline(y=sub18.Stack_EN_RMSE.mean(),color="k",lw=1.5,ls="--",label=f"μ={sub18.Stack_EN_RMSE.mean():.3f}")
-    axes[1].set_xlabel("Seed"); axes[1].set_ylabel("EN Stack RMSE (LOO)"); axes[1].set_title("B0018 LOO Seed Stability",fontweight="bold"); axes[1].legend(fontsize=9)
-    fig.suptitle("Fig. L7 — B0018 LOO Diagnostic (132 cycles; trained on 3 longer-life cells)",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL07_b0018_loo_diagnostic.png")
-
-    # FIG L8: R² comparison
-    fig,axes=plt.subplots(1,2,figsize=(13,5))
-    r2_wb={m:within[f"{m}_R2"].mean() for m in MODS_SHOW if f"{m}_R2" in within.columns}
-    r2_loo={m:float(loo_ovrl[loo_ovrl.Model==m].R2_mean.values[0]) for m in MODS_SHOW if len(loo_ovrl[loo_ovrl.Model==m])>0}
-    x2=np.arange(len(MODS_SHOW)); w2=0.35
-    axes[0].bar(x2-w2/2,[r2_wb.get(m,0) for m in MODS_SHOW],w2,label="Within-Battery",color=[MCLR.get(m,"grey") for m in MODS_SHOW],alpha=.85)
-    axes[0].bar(x2+w2/2,[r2_loo.get(m,0) for m in MODS_SHOW],w2,label="LOO",color=[MCLR.get(m,"grey") for m in MODS_SHOW],alpha=.40,hatch="////",edgecolor="grey",lw=.5)
-    axes[0].set_xticks(x2); axes[0].set_xticklabels(NICE_S,fontsize=9.5); axes[0].set_ylabel("R²"); axes[0].set_title("R² Comparison: Within vs LOO",fontweight="bold"); axes[0].legend(fontsize=9.5)
-    r2_loo_per={bid:float(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model=="Stack_EN")].R2_mean.values[0])
-                if len(loo_smry[(loo_smry.Test_Battery==bid)&(loo_smry.Model=="Stack_EN")])>0 else 0 for bid in CELLS}
-    axes[1].bar(CELLS,[r2_loo_per[b] for b in CELLS],color=[PAL[b] for b in CELLS],alpha=.85)
-    axes[1].axhline(y=0,color="k",lw=1.2,ls="--")
-    for i,(bid,v) in enumerate(r2_loo_per.items()): axes[1].text(i,v+.01,f"{v:.3f}",ha="center",va="bottom",fontsize=9)
-    axes[1].set_ylabel("R² (LOO)"); axes[1].set_title("Stack EN R² — Per Held-Out Battery (LOO mean)",fontweight="bold")
-    fig.suptitle("Fig. L8 — R² Comparison: Within-Battery vs LOO (GRU+LSTM+XGB models)",fontsize=11,fontweight="bold")
-    plt.tight_layout(); save(fig,"figL08_r2_comparison.png")
-
-    print(f"\n  All LOO figures saved to: {FIGS_LOO}")
 
 if __name__ == "__main__":
     main()
