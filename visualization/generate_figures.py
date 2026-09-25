@@ -1,18 +1,12 @@
-"""
-generate_figures.py — Generate all 14 publication-quality figures.
 
-Run from the project root:   python visualization/generate_figures.py
-Requires run_all_experiments.py to have completed successfully.
-All figures are saved to the figures/ directory at 300 DPI.
-"""
 import sys
 import os
 import warnings
 import pickle
 from pathlib import Path
 
-_SCRIPT_DIR  = Path(__file__).resolve().parent
-PROJECT_ROOT = _SCRIPT_DIR.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -25,444 +19,1123 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 from config import RESULTS_DIR, FIGURES_DIR, BATTERIES, LOGS_DIR, DATA_DIR
 from src.feature_engineering import extract_rich_features
 
-# ── Journal-quality style ─────────────────────────────────────────────────────
+CELLS = list(BATTERIES.keys())
+SEEDS = [42, 123, 2024]
+
+PALETTE = {
+    "B0005": "#2166ac",
+    "B0006": "#d6604d",
+    "B0007": "#1a9850",
+    "B0018": "#7b2d8b",
+}
+
+MODEL_COLORS = {
+    "GRU": "#4d9de0",
+    "LSTM": "#3bb273",
+    "XGB": "#d01c8b",
+    "Weighted": "#8073ac",
+    "Stack_LR": "#e08214",
+    "Stack_Ridge": "#35978f",
+    "Stack_EN": "#bf5b17",
+}
+
+MODS = ["GRU", "LSTM", "XGB", "Weighted", "Stack_LR", "Stack_Ridge", "Stack_EN"]
+MODS_LOO = ["GRU", "LSTM", "XGB", "Weighted", "Stack_Ridge", "Stack_EN"]
+NICE = ["GRU", "LSTM", "XGBoost", "Weighted\nEns.", "Stack\nLR", "Stack\nRidge", "Stack\nEN"]
+
 plt.rcParams.update({
-    "font.family":       "serif",
-    "font.size":         10.5,
-    "axes.titlesize":    11.5,
-    "axes.labelsize":    10.5,
-    "xtick.labelsize":   9.5,
-    "ytick.labelsize":   9.5,
-    "legend.fontsize":   9.0,
-    "figure.dpi":        150,
-    "savefig.dpi":       300,
-    "savefig.bbox":      "tight",
-    "axes.spines.top":   False,
+    "font.family": "serif",
+    "font.size": 10.5,
+    "axes.titlesize": 11.5,
+    "axes.labelsize": 10.5,
+    "xtick.labelsize": 9.5,
+    "ytick.labelsize": 9.5,
+    "legend.fontsize": 8.8,
+    "figure.dpi": 150,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
+    "axes.spines.top": False,
     "axes.spines.right": False,
-    "axes.grid":         True,
-    "grid.alpha":        0.22,
-    "grid.linestyle":    "--",
-    "lines.linewidth":   1.7,
+    "axes.grid": True,
+    "grid.alpha": 0.22,
+    "grid.linestyle": "--",
+    "lines.linewidth": 1.7,
 })
 
-CELLS   = list(BATTERIES.keys())
-PALETTE = {"B0005": "#2166ac", "B0006": "#d6604d", "B0007": "#1a9850", "B0018": "#7b2d8b"}
-MODEL_COLORS = {
-    "GRU":         "#4d9de0",
-    "LSTM":        "#3bb273",
-    "XGB":         "#d01c8b",
-    "Weighted":    "#8073ac",
-    "Stack_LR":    "#e08214",
-    "Stack_Ridge": "#35978f",
-    "Stack_EN":    "#bf5b17",
-}
-MODEL_NICE = {
-    "GRU":         "GRU",
-    "LSTM":        "LSTM",
-    "XGB":         "XGBoost",
-    "Weighted":    "Weighted\nEns.",
-    "Stack_LR":    "Stack\n(LR)",
-    "Stack_Ridge": "Stack\n(Ridge)",
-    "Stack_EN":    "Stack\n(EN) ★",
-}
-MODS = list(MODEL_NICE.keys())
-NICE = list(MODEL_NICE.values())
-MCLR = [MODEL_COLORS[m] for m in MODS]
+LOO_DIR = RESULTS_DIR / "loo"
 
 
-def load_data():
-    """Load all result files needed for figures."""
-    full  = pd.read_csv(str(RESULTS_DIR / "final_results_raw.csv"))
-    ovrl  = pd.read_csv(str(RESULTS_DIR / "final_overall.csv"))
-    smry  = pd.read_csv(str(RESULTS_DIR / "final_summary_per_battery.csv"))
-    preds = {}
-    for bid in CELLS:
-        p = RESULTS_DIR / f"{bid}_predictions_s42.csv"
-        if p.exists():
-            preds[bid] = pd.read_csv(str(p))
-    rich = {}
-    for bid, mf in BATTERIES.items():
-        rp = RESULTS_DIR / f"{bid}_rich.csv"
-        if rp.exists():
-            rich[bid] = pd.read_csv(str(rp))
-        else:
-            print(f"  Extracting features for {bid} …")
-            df = extract_rich_features(DATA_DIR / mf, bid)
-            df.to_csv(str(rp), index=False)
-            rich[bid] = df
-    return full, ovrl, smry, preds, rich
-
-
-def save(fig, name):
-    path = FIGURES_DIR / name
-    fig.savefig(str(path), dpi=300)
+def save(fig, filename):
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    path = FIGURES_DIR / filename
+    fig.savefig(str(path), dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"  Saved {name}")
+    print(f"Saved {filename}")
 
 
-def fig01_degradation(rich):
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+def load_all():
+    required = [
+        RESULTS_DIR / "final_results_raw.csv",
+        RESULTS_DIR / "final_overall.csv",
+        RESULTS_DIR / "final_summary_per_battery.csv",
+    ]
+    for p in required:
+        if not p.exists():
+            raise FileNotFoundError(f"Missing required result file: {p}")
+
+    full = pd.read_csv(RESULTS_DIR / "final_results_raw.csv")
+    overall = pd.read_csv(RESULTS_DIR / "final_overall.csv")
+    summary = pd.read_csv(RESULTS_DIR / "final_summary_per_battery.csv")
+
+    preds = {}
+    rich = {}
+
+    for bid in CELLS:
+        pred_file = RESULTS_DIR / f"{bid}_predictions_s42.csv"
+        if pred_file.exists():
+            preds[bid] = pd.read_csv(pred_file)
+
+        rich_file = RESULTS_DIR / f"{bid}_rich.csv"
+        if rich_file.exists():
+            rich[bid] = pd.read_csv(rich_file)
+        else:
+            mat_file = DATA_DIR / BATTERIES[bid]
+            rich[bid] = extract_rich_features(mat_file, bid)
+            rich[bid].to_csv(rich_file, index=False)
+
+    return full, overall, summary, preds, rich
+
+
+def load_loo():
+    required = [
+        LOO_DIR / "loo_results_raw.csv",
+        LOO_DIR / "loo_summary_per_battery.csv",
+        LOO_DIR / "loo_overall.csv",
+        LOO_DIR / "loo_preds_s42.pkl",
+    ]
+    for p in required:
+        if not p.exists():
+            raise FileNotFoundError(
+                f"Missing LOO result file: {p}\n"
+                "Run experiments/run_loo_experiment.py first."
+            )
+
+    loo_raw = pd.read_csv(LOO_DIR / "loo_results_raw.csv")
+    loo_summary = pd.read_csv(LOO_DIR / "loo_summary_per_battery.csv")
+    loo_overall = pd.read_csv(LOO_DIR / "loo_overall.csv")
+
+    with open(LOO_DIR / "loo_preds_s42.pkl", "rb") as f:
+        loo_preds = pickle.load(f)
+
+    return loo_raw, loo_summary, loo_overall, loo_preds
+
+
+def add_panel_label(ax, label):
+    ax.text(
+        0.015, 0.965, f"({label})",
+        transform=ax.transAxes,
+        ha="left", va="top",
+        fontsize=12, fontweight="bold"
+    )
+
+
+def make_box(ax, x, y, w, h, title, body, face):
+    patch = FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle="round,pad=0.012,rounding_size=0.018",
+        linewidth=0.8,
+        edgecolor="white",
+        facecolor=face,
+        zorder=3
+    )
+    ax.add_patch(patch)
+    ax.text(
+        x + w / 2, y + h * 0.64, title,
+        ha="center", va="center",
+        color="white", fontsize=9, fontweight="bold", zorder=4
+    )
+    ax.text(
+        x + w / 2, y + h * 0.28, body,
+        ha="center", va="center",
+        color="white", fontsize=8, linespacing=1.25, zorder=4
+    )
+
+
+def add_arrow(ax, x1, y1, x2, y2, rad=0.0):
+    ax.add_patch(FancyArrowPatch(
+        (x1, y1), (x2, y2),
+        arrowstyle="-|>",
+        mutation_scale=13,
+        linewidth=1.3,
+        color="#4B5563",
+        connectionstyle=f"arc3,rad={rad}",
+        zorder=2
+    ))
+
+
+def figure_1(rich):
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     axes = axes.flatten()
+
     for ax, bid in zip(axes, CELLS):
-        df = rich[bid]; tot = len(df)
-        b, e, m = int(tot * .60), int(tot * .70), int(tot * .85)
-        ax.fill_betweenx([50, 105], [1, 1], [b, b],   alpha=.12, color="#2166ac", label="Base train")
-        ax.fill_betweenx([50, 105], [b, b], [e, e],   alpha=.14, color="#fdae61", label="Early-val")
-        ax.fill_betweenx([50, 105], [e, e], [m, m],   alpha=.14, color="#a6dba0", label="Meta block")
-        ax.fill_betweenx([50, 105], [m, m], [tot, tot], alpha=.18, color="#762a83", label="Test set")
-        ax.plot(df.Cycle, df.SOH, color=PALETTE[bid], lw=2.2, zorder=5)
-        ax.set_title(f"{bid}  ({tot} discharge cycles)", fontweight="bold")
-        ax.set_xlabel("Discharge cycle"); ax.set_ylabel("SOH (%)")
+        df = rich[bid]
+        total = len(df)
+
+        base_end = int(total * 0.60)
+        ev_end = int(total * 0.70)
+        meta_end = int(total * 0.85)
+
+        ax.axvspan(0, base_end, color="#2166ac", alpha=0.10, label="Base training, 60%")
+        ax.axvspan(base_end, ev_end, color="#fdae61", alpha=0.16, label="Early validation, 10%")
+        ax.axvspan(ev_end, meta_end, color="#35a979", alpha=0.14, label="Meta training, 15%")
+        ax.axvspan(meta_end, total, color="#762a83", alpha=0.14, label="Final test set, 15%")
+
+        ax.plot(
+            df.Cycle, df.SOH,
+            color=PALETTE[bid], lw=2.2,
+            label="Measured SOH trajectory", zorder=5
+        )
+
+        ax.set_title(
+            f"{bid}  ({total} discharge cycles)",
+            fontweight="bold"
+        )
+        ax.set_xlabel("Discharge cycle")
+        ax.set_ylabel("SOH (%)")
         ax.set_ylim(50, 103)
-    axes[0].legend(loc="lower left", fontsize=7.5, framealpha=.85, ncol=2)
-    fig.suptitle("Fig. 1 — SOH Degradation Trajectories with Chronological Data Partition",
-                 fontsize=11, fontweight="bold")
-    plt.tight_layout()
+
+        ax.text(
+            0.015, 0.04,
+            "Background: chronological partition",
+            transform=ax.transAxes,
+            fontsize=8,
+            bbox=dict(facecolor="white", alpha=0.82, edgecolor="none")
+        )
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.02),
+        ncol=3,
+        frameon=True,
+        fontsize=8.5
+    )
+
+    fig.suptitle(
+        "Figure 1. SOH degradation trajectories and chronological data partition",
+        fontsize=12, fontweight="bold"
+    )
+    plt.tight_layout(rect=[0, 0.06, 1, 0.96])
     save(fig, "fig01_degradation_trajectories.png")
 
 
-def fig02_feature_profiles(rich):
-    fig, axes = plt.subplots(3, 2, figsize=(11, 9))
-    pairs = [("V_mean","Mean Voltage (V)"), ("V_slope","Voltage Slope (V/sample)"),
-             ("T_mean","Mean Temperature (°C)"), ("T_rise","Temperature Rise (°C)"),
-             ("power","Mean Power (W)"), ("dur","Discharge Duration (samples)")]
-    for ax, (fc, lbl) in zip(axes.flatten(), pairs):
-        for bid in CELLS:
-            ax.plot(rich[bid].Cycle, rich[bid][fc], color=PALETTE[bid], lw=1.4, alpha=.85, label=bid)
-        ax.set_xlabel("Discharge cycle"); ax.set_ylabel(lbl)
-    axes[0, 0].legend(fontsize=8, framealpha=.8)
-    fig.suptitle("Fig. 2 — Engineered Feature Time Series Across All Four Cells\n"
-                 "(within-cycle statistics; Capacity excluded from predictive features)",
-                 fontsize=11, fontweight="bold")
-    plt.tight_layout()
-    save(fig, "fig02_feature_profiles.png")
+def figure_2_workflow():
+    fig, ax = plt.subplots(figsize=(13.5, 7.8))
+    ax.set_xlim(0, 13.5)
+    ax.set_ylim(0, 8.0)
+    ax.axis("off")
+
+    navy = "#203D70"
+    blue = "#2774B9"
+    teal = "#319B95"
+    grey = "#555A60"
+    green = "#1F5C3A"
+    orange = "#D98B3A"
+    purple = "#752A84"
+    light_blue = "#4A9DDA"
+    light_green = "#35A979"
+    magenta = "#D11879"
+    brown = "#B65E16"
+
+    ax.text(
+        6.75, 7.72,
+        "Figure 2. Experimental workflow and model architecture",
+        ha="center", va="center",
+        fontsize=15, fontweight="bold", color=navy
+    )
+
+    make_box(ax, 0.35, 6.25, 1.75, 0.95, "NASA MAT files", "B0005 to B0018", navy)
+    make_box(ax, 2.45, 6.25, 1.75, 0.95, "Discharge extraction", "V, I, T, Capacity", blue)
+    make_box(ax, 4.55, 6.25, 1.85, 0.95, "20 feature extraction", "per cycle", teal)
+    make_box(ax, 6.75, 6.25, 1.65, 0.95, "MinMax scaler", "fit on training only", grey)
+    make_box(ax, 8.75, 6.25, 2.05, 0.95, "Sliding window", "sequence length = 32\nXGB lag = 5", navy)
+
+    add_arrow(ax, 2.10, 6.73, 2.45, 6.73)
+    add_arrow(ax, 4.20, 6.73, 4.55, 6.73)
+    add_arrow(ax, 6.40, 6.73, 6.75, 6.73)
+    add_arrow(ax, 8.40, 6.73, 8.75, 6.73)
+
+    ax.text(
+        5.60, 6.05,
+        "Data ingestion and preprocessing",
+        ha="center", fontsize=8.5, color="#555555", style="italic"
+    )
+
+    make_box(ax, 0.35, 4.60, 1.95, 0.82, "Chronological split", "60 / 10 / 15 / 15%", green)
+    make_box(ax, 2.55, 4.60, 1.65, 0.82, "Base training", "60%", navy)
+    make_box(ax, 4.45, 4.60, 1.35, 0.82, "Early validation", "10%", orange)
+    make_box(ax, 6.05, 4.60, 1.45, 0.82, "Meta training", "15%", light_green)
+    make_box(ax, 7.75, 4.60, 1.35, 0.82, "Final test", "15%", purple)
+
+    add_arrow(ax, 2.30, 5.01, 2.55, 5.01)
+    add_arrow(ax, 4.20, 5.01, 4.45, 5.01)
+    add_arrow(ax, 5.80, 5.01, 6.05, 5.01)
+    add_arrow(ax, 7.50, 5.01, 7.75, 5.01)
+
+    ax.text(
+        5.05, 4.27,
+        "Strictly chronological, no future data, leakage controlled",
+        ha="center", fontsize=8.3, color="#555555", style="italic"
+    )
+
+    make_box(ax, 3.35, 3.00, 1.85, 0.85, "GRU", "2 layers, 64 units\ndropout = 0.20", light_blue)
+    make_box(ax, 5.70, 3.00, 1.85, 0.85, "LSTM", "2 layers, 64 units\ndropout = 0.20", light_green)
+    make_box(ax, 8.05, 3.00, 1.85, 0.85, "XGBoost", "300 trees, depth = 4\nlag features", magenta)
+
+    add_arrow(ax, 3.38, 4.60, 3.38, 4.05)
+    ax.plot([3.38, 8.98], [4.05, 4.05], color="#4B5563", linewidth=1.2, zorder=1)
+    add_arrow(ax, 4.28, 4.05, 4.28, 3.86)
+    add_arrow(ax, 6.63, 4.05, 6.63, 3.86)
+    add_arrow(ax, 8.98, 4.05, 8.98, 3.86)
+
+    make_box(
+        ax, 4.70, 1.70, 3.90, 0.82,
+        "Meta predictions to ElasticNet stacking",
+        "alpha = 0.05, l1 ratio = 0.50",
+        brown
+    )
+
+    add_arrow(ax, 4.28, 3.00, 5.25, 2.52, rad=0.02)
+    add_arrow(ax, 6.63, 3.00, 6.65, 2.52)
+    add_arrow(ax, 8.98, 3.00, 7.95, 2.52, rad=-0.02)
+
+    make_box(
+        ax, 9.35, 1.70, 3.45, 0.82,
+        "Final test evaluation",
+        "held out from model fitting",
+        navy
+    )
+
+    add_arrow(ax, 8.42, 5.01, 12.10, 4.20, rad=-0.08)
+    add_arrow(ax, 12.10, 4.20, 12.10, 2.52)
+
+    ax.text(
+        6.75, 0.78,
+        "LOO: one complete battery is held out; the remaining batteries supply training and meta data",
+        ha="center", fontsize=8.2, color="#555555", style="italic"
+    )
+
+    fig.savefig(
+        FIGURES_DIR / "fig02_workflow.png",
+        dpi=600, bbox_inches="tight", facecolor="white"
+    )
+    plt.close(fig)
+    print("Saved fig02_workflow.png")
 
 
-def fig03_b0006_diagnostic(rich):
-    fig = plt.figure(figsize=(13, 9))
-    gs  = gridspec.GridSpec(3, 3, figure=fig, hspace=.45, wspace=.38)
-    df6 = rich["B0006"]; tot6 = len(df6)
-    m6, b6 = int(tot6 * .85), int(tot6 * .60)
+def figure_3_actual_vs_predicted(preds):
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    axes = axes.flatten()
 
-    ax0 = fig.add_subplot(gs[0, :])
-    ax0.plot(df6.Cycle, df6.SOH, "#d6604d", lw=2.2)
-    ax0.axvspan(m6, tot6, alpha=.18, color="#762a83", label=f"Test (cycles {m6+1}–{tot6})")
-    ax0.axvline(b6, color="#2166ac", lw=1.5, ls="--", label="Base/EV boundary (60%)")
-    ax0.axvline(m6, color="#762a83", lw=1.5, ls="--", label="Meta/Test boundary (85%)")
-    ax0.set_xlabel("Discharge cycle"); ax0.set_ylabel("SOH (%)")
-    ax0.set_title("B0006 SOH Trajectory — Test region spans steepest late-life decline "
-                  "(SOH 56.7–63.4%)", fontweight="bold")
-    ax0.legend(fontsize=8, ncol=2, framealpha=.8)
-
-    feature_pairs = [
-        ("V_mean","V_mean (V)"), ("V_slope","V_slope"), ("T_rise","T_rise (°C)"),
-        ("power","Power (W)"),   ("V_p10","V_p10 (V)"), ("dur","Duration"),
-    ]
-    for ax, (fc, lbl) in zip([fig.add_subplot(gs[i, j]) for i in [1,2] for j in range(3)],
-                              feature_pairs):
-        ax.plot(df6.Cycle, df6[fc], "#d6604d", lw=1.6, label="B0006")
-        for bid2 in ["B0005", "B0007"]:
-            ax.plot(rich[bid2].Cycle, rich[bid2][fc], color=PALETTE[bid2], lw=.9, alpha=.55, label=bid2)
-        ax.axvspan(m6, tot6, alpha=.12, color="#762a83")
-        ax.set_xlabel("Cycle"); ax.set_ylabel(lbl, fontsize=9)
-        if fc == "V_mean": ax.legend(fontsize=7.5, framealpha=.7)
-
-    fig.suptitle("Fig. 3 — B0006 Diagnostic Analysis\n"
-                 "Purple region = test set; B0006 shows the steepest V decline "
-                 "and highest T_rise — largest distribution shift at test time.",
-                 fontsize=11, fontweight="bold")
-    save(fig, "fig03_b0006_diagnostic.png")
-
-
-def fig04_actual_vs_predicted(preds):
-    if not preds: return
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8)); axes = axes.flatten()
     for ax, bid in zip(axes, CELLS):
-        if bid not in preds: continue
-        p   = preds[bid]
-        cyc = p.Cycle.values; act = p.Actual_SOH.values
-        ax.plot(cyc, act, "k-", lw=2.4, label="Actual SOH", zorder=5)
-        ax.plot(cyc, p.GRU.values,  "--", color="#2166ac", lw=1.3, alpha=.75, label="GRU")
-        ax.plot(cyc, p.LSTM.values, "--", color="#4dac26", lw=1.3, alpha=.75, label="LSTM")
-        ax.plot(cyc, p.XGB.values,  ":",  color="#d01c8b", lw=1.2, alpha=.55, label="XGBoost")
-        ax.plot(cyc, p.Stack_EN.values, "-", color="#bf5b17", lw=2.2,
-                label="GRU+LSTM+XGB EN Stack")
-        en_rmse = float(np.sqrt(np.mean((act - p.Stack_EN.values)**2)))
-        en_mape = float(np.mean(np.abs((act - p.Stack_EN.values) / np.maximum(np.abs(act), 1e-8))) * 100)
-        ax.set_title(f"{bid}  |  EN Stack: RMSE={en_rmse:.4f}, MAPE={en_mape:.3f}%",
-                     fontweight="bold")
-        ax.set_xlabel("Discharge cycle"); ax.set_ylabel("SOH (%)")
-    axes[0].legend(fontsize=8, loc="lower left", framealpha=.85, ncol=2)
-    fig.suptitle("Fig. 4 — Actual vs Predicted SOH on Test Set (seed=42, representative run)\n"
-                 "Proposed: GRU + LSTM + XGBoost → ElasticNet Meta-Learner",
-                 fontsize=11, fontweight="bold")
+        if bid not in preds:
+            continue
+
+        p = preds[bid]
+        actual = p.Actual_SOH.values
+        pred = p.Stack_EN.values
+
+        ax.plot(p.Cycle, actual, "k-", lw=2.4, label="Actual SOH")
+        ax.plot(p.Cycle, p.GRU, "--", color="#2166ac", lw=1.3, label="GRU")
+        ax.plot(p.Cycle, p.LSTM, "--", color="#4dac26", lw=1.3, label="LSTM")
+        ax.plot(p.Cycle, p.XGB, ":", color="#d01c8b", lw=1.3, label="XGBoost")
+        ax.plot(
+            p.Cycle, pred,
+            "-", color="#bf5b17", lw=2.2,
+            label="GRU + LSTM + XGBoost + ElasticNet"
+        )
+
+        rmse = np.sqrt(np.mean((actual - pred) ** 2))
+        mape = np.mean(
+            np.abs((actual - pred) / np.maximum(np.abs(actual), 1e-8))
+        ) * 100
+
+        ax.set_title(
+            f"{bid} | RMSE = {rmse:.3f}, MAPE = {mape:.2f}%",
+            fontweight="bold"
+        )
+        ax.set_xlabel("Discharge cycle")
+        ax.set_ylabel("SOH (%)")
+
+    axes[0].legend(
+        fontsize=7.7,
+        loc="lower left",
+        framealpha=0.88,
+        ncol=2
+    )
+
+    fig.suptitle(
+        "Figure 3. Actual versus predicted SOH on within battery test sets",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
-    save(fig, "fig04_actual_vs_predicted.png")
+    save(fig, "fig03_actual_vs_predicted.png")
 
 
-def fig05_scatter(preds):
-    if not preds: return
-    fig, axes = plt.subplots(2, 2, figsize=(9.5, 8.5)); axes = axes.flatten()
-    for ax, bid in zip(axes, CELLS):
-        if bid not in preds: continue
-        p   = preds[bid]; act = p.Actual_SOH.values; pred = p.Stack_EN.values
-        ax.scatter(act, pred, color=PALETTE[bid], s=48, alpha=.82, edgecolors="white", lw=.6, zorder=5)
-        mn = min(act.min(), pred.min()) - .5; mx = max(act.max(), pred.max()) + .5
-        ax.plot([mn, mx], [mn, mx], "k--", lw=1.5)
-        ss_res = np.sum((act - pred)**2); ss_tot = np.sum((act - np.mean(act))**2)
-        r2v    = 1 - ss_res / ss_tot if ss_tot > 0 else float("nan")
-        ax.text(.05, .93, f"R² = {r2v:.4f}", transform=ax.transAxes, fontsize=10,
-                bbox=dict(fc="white", alpha=.88, boxstyle="round,pad=0.3"))
-        ax.set_title(f"{bid}", fontweight="bold")
-        ax.set_xlabel("Actual SOH (%)"); ax.set_ylabel("Predicted SOH (%)")
-    fig.suptitle("Fig. 5 — Predicted vs Actual SOH (seed=42)\nGRU+LSTM+XGBoost ElasticNet Stack",
-                 fontsize=11, fontweight="bold")
+def figure_4_heatmap(summary):
+    mat = np.full((len(MODS), len(CELLS)), np.nan)
+
+    for i, model in enumerate(MODS):
+        for j, bid in enumerate(CELLS):
+            row = summary[
+                (summary.Battery == bid) &
+                (summary.Model == model)
+            ]
+            if len(row):
+                mat[i, j] = float(row.RMSE_mean.iloc[0])
+
+    fig, ax = plt.subplots(figsize=(8.2, 6.0))
+    im = ax.imshow(mat, cmap="RdYlGn_r", aspect="auto", vmin=0, vmax=8)
+
+    ax.set_xticks(range(len(CELLS)))
+    ax.set_xticklabels(CELLS)
+    ax.set_yticks(range(len(MODS)))
+    ax.set_yticklabels(NICE)
+
+    for i in range(len(MODS)):
+        for j in range(len(CELLS)):
+            value = mat[i, j]
+            if np.isfinite(value):
+                ax.text(
+                    j, i, f"{value:.3f}",
+                    ha="center", va="center",
+                    fontsize=9.2, fontweight="bold",
+                    color="white" if value > 5 else "black"
+                )
+
+    ax.set_xlabel("Battery cell")
+    ax.set_ylabel("Model or ensemble configuration")
+    ax.set_title(
+        "Figure 4. Within battery RMSE heatmap, mean across three seeds",
+        fontweight="bold"
+    )
+    plt.colorbar(im, ax=ax, label="RMSE, SOH percentage points")
     plt.tight_layout()
-    save(fig, "fig05_scatter.png")
+    save(fig, "fig04_rmse_heatmap.png")
 
 
-def fig06_residuals(preds):
-    if not preds: return
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7.5)); axes = axes.flatten()
+def figure_5_multiseed(full):
+    fig, axes = plt.subplots(1, 4, figsize=(13, 4.5))
+
     for ax, bid in zip(axes, CELLS):
-        if bid not in preds: continue
-        p   = preds[bid]; res = p.Stack_EN.values - p.Actual_SOH.values
-        ax.bar(p.Cycle.values, res, color=PALETTE[bid], alpha=.78, width=.65)
-        ax.axhline(y=0,              color="k",    lw=1.3, ls="--")
-        ax.axhline(y=float(res.std()),  color="grey", lw=1,   ls=":", label=f"σ={res.std():.4f}")
-        ax.axhline(y=-float(res.std()), color="grey", lw=1,   ls=":")
-        ax.set_title(f"{bid}  |  μ={res.mean():.4f}  σ={res.std():.4f}", fontweight="bold")
-        ax.set_xlabel("Discharge cycle"); ax.set_ylabel("Residual (SOH %)")
-        ax.legend(fontsize=8.5, framealpha=.8)
-    fig.suptitle("Fig. 6 — Prediction Residuals (seed=42)\nGRU+LSTM+XGBoost ElasticNet Stack",
-                 fontsize=11, fontweight="bold")
+        sub = full[full.Battery == bid].copy()
+        values = sub["Stack_EN_RMSE"].values
+        seeds = sub["Seed"].astype(str).values
+
+        ax.bar(
+            seeds, values,
+            color=PALETTE[bid],
+            alpha=0.85,
+            edgecolor="white"
+        )
+
+        mean_value = float(np.mean(values))
+        std_value = float(np.std(values, ddof=1))
+
+        ax.axhline(
+            mean_value,
+            color="black",
+            lw=1.5,
+            ls="--",
+            label=f"Three seed mean = {mean_value:.3f}"
+        )
+
+        ax.text(
+            0.03, 0.92,
+            f"Bars: Stack ElasticNet RMSE\n"
+            f"Dashed line: three seed mean\n"
+            f"SD = {std_value:.3f}",
+            transform=ax.transAxes,
+            fontsize=7.8,
+            va="top",
+            bbox=dict(facecolor="white", alpha=0.88, edgecolor="none")
+        )
+
+        ax.set_title(bid, fontweight="bold")
+        ax.set_xlabel("Evaluation seed")
+        ax.set_ylabel("RMSE, SOH %" if bid == CELLS[0] else "")
+        ax.legend(fontsize=7.6, framealpha=0.88)
+
+    fig.suptitle(
+        "Figure 5. Seed wise Stack ElasticNet RMSE",
+        fontsize=12, fontweight="bold"
+    )
+    plt.tight_layout()
+    save(fig, "fig05_multiseed_rmse.png")
+
+
+def figure_6_residual_bars(preds):
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    axes = axes.flatten()
+
+    for ax, bid in zip(axes, CELLS):
+        p = preds[bid]
+        residual = p.Stack_EN.values - p.Actual_SOH.values
+        sigma = float(np.std(residual, ddof=1))
+        mu = float(np.mean(residual))
+
+        ax.bar(
+            p.Cycle.values,
+            residual,
+            color=PALETTE[bid],
+            alpha=0.78,
+            width=0.65
+        )
+        ax.axhline(0, color="black", lw=1.3, ls="--", label="Zero residual")
+        ax.axhline(
+            sigma, color="grey", lw=1.0, ls=":",
+            label=f"+1 SD = {sigma:.3f}"
+        )
+        ax.axhline(-sigma, color="grey", lw=1.0, ls=":")
+
+        ax.set_title(
+            f"{bid} | mean residual = {mu:.3f}, SD = {sigma:.3f}",
+            fontweight="bold"
+        )
+        ax.set_xlabel("Discharge cycle")
+        ax.set_ylabel("Residual, predicted minus actual SOH (%)")
+        ax.legend(fontsize=7.7, framealpha=0.88)
+
+    fig.suptitle(
+        "Figure 6. Cycle level prediction residuals for Stack ElasticNet, seed 42",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
     save(fig, "fig06_residuals.png")
 
 
-def fig07_per_cell_rmse(full, smry):
-    x = np.arange(len(MODS)); w = 0.19
-    fig, ax = plt.subplots(figsize=(12.5, 5.5))
-    for i, (bid, clr) in enumerate(PALETTE.items()):
-        vals = [smry[(smry.Battery==bid) & (smry.Model==m)].RMSE_mean.values
-                for m in MODS]
-        errs = [smry[(smry.Battery==bid) & (smry.Model==m)].RMSE_std.values
-                for m in MODS]
-        v = [float(v[0]) if len(v) else 0.0 for v in vals]
-        e = [float(v[0]) if len(v) else 0.0 for v in errs]
-        ax.bar(x + i*w, v, w, label=bid, color=clr, alpha=.85,
-               yerr=e, capsize=3, error_kw={"elinewidth": 1.2})
-    ax.set_xticks(x + 1.5*w)
-    ax.set_xticklabels(NICE, fontsize=9.5)
-    ax.set_ylabel("RMSE (SOH %)")
-    ax.set_title("Fig. 7 — Per-Cell RMSE: All Models (mean ± std, 3 seeds)\n★ = Proposed method",
-                 fontweight="bold")
-    ax.legend(ncol=4, fontsize=9, loc="upper right", framealpha=.85)
-    ax.axvspan(5.7, 7.3, alpha=.07, color="gold", zorder=0)
-    plt.tight_layout()
-    save(fig, "fig07_rmse_per_cell.png")
-
-
-def fig08_overall_comparison(ovrl):
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 5))
-    for ax, (met, ylab) in zip(axes,
-            [("RMSE_mean","RMSE (SOH %)"),
-             ("MAE_mean", "MAE (SOH %)"),
-             ("MAPE_mean","MAPE (%)")]):
-        vals = []
-        for mdl in MODS:
-            row = ovrl[ovrl.Model == mdl]
-            vals.append(float(row[met].values[0]) if len(row) else 0.0)
-        bars = ax.bar(NICE, vals, color=MCLR, alpha=.87)
-        for bar, v in zip(bars, vals):
-            ax.text(bar.get_x() + bar.get_width()/2, v + .05,
-                    f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
-        ax.set_ylabel(ylab)
-        ax.tick_params(axis="x", labelsize=8.5)
-        ax.set_title(met.replace("_mean", ""), fontweight="bold")
-        mi = int(np.argmin(vals))
-        bars[mi].set_edgecolor("black"); bars[mi].set_linewidth(2.2)
-    fig.suptitle("Fig. 8 — Overall Model Performance (mean across 4 cells × 3 seeds)\n"
-                 "Black border = best model", fontsize=11, fontweight="bold")
-    plt.tight_layout()
-    save(fig, "fig08_overall_comparison.png")
-
-
-def fig09_rmse_heatmap(smry):
-    mat = np.zeros((len(MODS), len(CELLS)))
-    for i, mdl in enumerate(MODS):
-        for j, bid in enumerate(CELLS):
-            row = smry[(smry.Battery==bid) & (smry.Model==mdl)]
-            mat[i, j] = float(row.RMSE_mean.values[0]) if len(row) else np.nan
-    fig, ax = plt.subplots(figsize=(7.5, 5.5))
-    im = ax.imshow(mat, cmap="RdYlGn_r", aspect="auto", vmin=0, vmax=8)
-    ax.set_xticks(range(4)); ax.set_xticklabels(CELLS, fontsize=11)
-    ax.set_yticks(range(len(MODS))); ax.set_yticklabels(NICE, fontsize=10)
-    for i in range(len(MODS)):
-        for j in range(4):
-            v = mat[i, j]
-            ax.text(j, i, f"{v:.3f}", ha="center", va="center", fontsize=9.5,
-                    color="white" if v > 5 else "black", fontweight="bold")
-    plt.colorbar(im, ax=ax, label="RMSE (SOH %)", fraction=.025)
-    ax.set_title("Fig. 9 — RMSE Heatmap (mean, 3 seeds)", fontweight="bold")
-    plt.tight_layout()
-    save(fig, "fig09_rmse_heatmap.png")
-
-
-def fig10_multiseed(full):
+def figure_7_residual_hist(preds):
     fig, axes = plt.subplots(1, 4, figsize=(13, 4.5))
+
     for ax, bid in zip(axes, CELLS):
-        sub  = full[full.Battery == bid]
-        sv   = sub["Stack_EN_RMSE"].values
-        seeds = sub["Seed"].astype(str).values
-        ax.bar(seeds, sv, color=PALETTE[bid], alpha=.85, edgecolor="white")
-        ax.axhline(y=float(sv.mean()), color="k", lw=1.5, ls="--",
-                   label=f"μ={sv.mean():.3f}")
-        ax.set_title(f"{bid}", fontweight="bold")
-        ax.set_xlabel("Seed")
-        ax.set_ylabel("RMSE (SOH %)" if bid == CELLS[0] else "")
-        ax.legend(fontsize=8.5, framealpha=.8)
-    fig.suptitle("Fig. 10 — Seed-Wise RMSE: GRU+LSTM+XGBoost EN Stack",
-                 fontsize=11, fontweight="bold")
+        p = preds[bid]
+        residual = p.Stack_EN.values - p.Actual_SOH.values
+        mean_value = float(np.mean(residual))
+        std_value = float(np.std(residual, ddof=1))
+
+        ax.hist(
+            residual,
+            bins=8,
+            color=PALETTE[bid],
+            alpha=0.82,
+            edgecolor="white"
+        )
+        ax.axvline(
+            0, color="black", lw=1.5, ls="--",
+            label="Zero residual"
+        )
+        ax.axvline(
+            mean_value, color="red", lw=1.5,
+            label=f"Mean = {mean_value:.3f}"
+        )
+
+        ax.set_title(
+            f"{bid} | SD = {std_value:.3f}",
+            fontweight="bold"
+        )
+        ax.set_xlabel("Residual, predicted minus actual SOH (%)")
+        if bid == CELLS[0]:
+            ax.set_ylabel("Count")
+        ax.legend(fontsize=7.6, framealpha=0.88)
+
+    fig.suptitle(
+        "Figure 7. Residual distributions for Stack ElasticNet, seed 42",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
-    save(fig, "fig10_multiseed.png")
+    save(fig, "fig07_residual_hist.png")
 
 
-def fig11_b0018_diagnostic(full, preds, smry):
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    b18  = smry[smry.Battery == "B0018"]
-    vals = [float(b18[b18.Model==m].RMSE_mean.values[0])
-            if len(b18[b18.Model==m]) else 0.0 for m in MODS]
-    errs = [float(b18[b18.Model==m].RMSE_std.values[0])
-            if len(b18[b18.Model==m]) else 0.0 for m in MODS]
-    bars = axes[0].bar(NICE, vals, color=MCLR, alpha=.87, yerr=errs, capsize=4)
-    for bar, v in zip(bars, vals):
-        axes[0].text(bar.get_x() + bar.get_width()/2, v + .04,
-                     f"{v:.3f}", ha="center", va="bottom", fontsize=8.5)
-    axes[0].set_ylabel("RMSE (SOH %)")
-    axes[0].set_title("B0018 RMSE by Model\n(mean ± std, 3 seeds)", fontweight="bold")
-    axes[0].tick_params(axis="x", labelsize=8.5)
+def figure_8_learning_curves():
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    axes = axes.flatten()
 
-    if "B0018" in preds:
-        p18 = preds["B0018"]
-        axes[1].plot(p18.Cycle, p18.Actual_SOH,   "k-",  lw=2.2, label="Actual")
-        axes[1].plot(p18.Cycle, p18.Stack_EN, "#bf5b17", lw=2.0,
-                     label=f"EN Stack (RMSE="
-                           f"{float(np.sqrt(np.mean((p18.Actual_SOH - p18.Stack_EN)**2))):.4f})")
-        axes[1].plot(p18.Cycle, p18.GRU,  "--", color="#2166ac", lw=1.3, alpha=.75, label="GRU")
-        axes[1].plot(p18.Cycle, p18.LSTM, "--", color="#4dac26", lw=1.3, alpha=.75, label="LSTM")
-        axes[1].set_xlabel("Discharge cycle"); axes[1].set_ylabel("SOH (%)")
-        axes[1].set_title("B0018 Actual vs Predicted (seed=42)", fontweight="bold")
-        axes[1].legend(fontsize=8.5)
-
-    fig.suptitle("Fig. 11 — B0018 Diagnostic: Short Degradation Record (132 cycles, 20 test seqs)",
-                 fontsize=11, fontweight="bold")
-    plt.tight_layout()
-    save(fig, "fig11_b0018_diagnostic.png")
-
-
-def fig12_residual_histograms(preds):
-    if not preds: return
-    fig, axes = plt.subplots(1, 4, figsize=(13, 4.5))
     for ax, bid in zip(axes, CELLS):
-        if bid not in preds: continue
-        p   = preds[bid]; res = p.Stack_EN.values - p.Actual_SOH.values
-        ax.hist(res, bins=8, color=PALETTE[bid], alpha=.82, edgecolor="white")
-        ax.axvline(x=0,              color="k",   lw=1.5, ls="--")
-        ax.axvline(x=float(res.mean()), color="red", lw=1.5,
-                   label=f"μ={res.mean():.3f}")
-        ax.set_title(f"{bid}", fontweight="bold")
-        ax.set_xlabel("Residual (SOH %)")
-        if bid == CELLS[0]: ax.set_ylabel("Count")
-        ax.legend(fontsize=8.5)
-    fig.suptitle("Fig. 12 — Residual Distributions (GRU+LSTM+XGB EN Stack, seed=42)",
-                 fontsize=11, fontweight="bold")
+        found = False
+
+        for model, color, linestyle in [
+            ("GRU", "#4d9de0", "--"),
+            ("LSTM", "#3bb273", "-"),
+        ]:
+            path = LOGS_DIR / f"{bid}_s42_{model}.csv"
+
+            if not path.exists():
+                continue
+
+            history = pd.read_csv(path)
+
+            if "loss" not in history.columns or "val_loss" not in history.columns:
+                continue
+
+            epochs = np.arange(1, len(history) + 1)
+
+            ax.plot(
+                epochs,
+                history["loss"],
+                color=color,
+                lw=1.8,
+                ls=linestyle,
+                label=f"{model} training loss"
+            )
+            ax.plot(
+                epochs,
+                history["val_loss"],
+                color=color,
+                lw=1.4,
+                ls=":",
+                alpha=0.78,
+                label=f"{model} validation loss"
+            )
+            found = True
+
+        ax.set_title(bid, fontweight="bold")
+        ax.set_xlabel("Training epoch")
+        ax.set_ylabel("MSE loss")
+        if found:
+            ax.legend(fontsize=7.7, framealpha=0.88)
+
+    fig.suptitle(
+        "Figure 8. Training and validation loss curves, seed 42",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
-    save(fig, "fig12_residual_hist.png")
+    save(fig, "fig08_learning_curves.png")
 
 
-def fig13_learning_curves():
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8)); axes = axes.flatten()
+def figure_9_loo_predictions(loo_preds, rich):
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    axes = axes.flatten()
+
     for ax, bid in zip(axes, CELLS):
-        for mdl, clr, ls in [("LSTM","#3bb273","-"), ("GRU","#4d9de0","--")]:
-            log = LOGS_DIR / f"{bid}_s42_{mdl}.csv"
-            if log.exists():
-                h = pd.read_csv(str(log))
-                ep = range(1, len(h)+1)
-                ax.plot(ep, h.loss,     color=clr, lw=1.8, ls=ls,    label=f"{mdl} train")
-                ax.plot(ep, h.val_loss, color=clr, lw=1.4, ls=":",   label=f"{mdl} val", alpha=.75)
-        ax.set_title(f"{bid}", fontweight="bold")
-        ax.set_xlabel("Epoch"); ax.set_ylabel("MSE Loss")
-        ax.legend(fontsize=8, framealpha=.8)
-    fig.suptitle("Fig. 13 — Training and Validation Loss Curves (seed=42)\n"
-                 "EarlyStopping monitors early-val partition only (test set never touched)",
-                 fontsize=11, fontweight="bold")
+        p = loo_preds[bid]
+        actual = p.Actual_SOH.values
+        stack = p.Stack_EN.values
+
+        ax.plot(
+            rich[bid].Cycle,
+            rich[bid].SOH,
+            color="lightgrey",
+            lw=1.0,
+            label="Full SOH trajectory"
+        )
+        ax.plot(
+            p.Cycle,
+            actual,
+            "k-",
+            lw=2.4,
+            label="Actual LOO test SOH"
+        )
+        ax.plot(
+            p.Cycle,
+            p.GRU,
+            "--",
+            color="#2166ac",
+            lw=1.3,
+            label="GRU"
+        )
+        ax.plot(
+            p.Cycle,
+            p.LSTM,
+            "--",
+            color="#4dac26",
+            lw=1.3,
+            label="LSTM"
+        )
+        ax.plot(
+            p.Cycle,
+            stack,
+            "-",
+            color="#bf5b17",
+            lw=2.2,
+            label="Stack ElasticNet"
+        )
+
+        rmse = np.sqrt(np.mean((actual - stack) ** 2))
+
+        ax.set_title(
+            f"{bid} | LOO RMSE = {rmse:.3f}",
+            fontweight="bold"
+        )
+        ax.set_xlabel("Discharge cycle")
+        ax.set_ylabel("SOH (%)")
+
+    add_panel_label(axes[0], "a")
+    add_panel_label(axes[1], "b")
+    add_panel_label(axes[2], "c")
+    add_panel_label(axes[3], "d")
+
+    axes[0].legend(
+        fontsize=7.4,
+        loc="lower left",
+        framealpha=0.88,
+        ncol=2
+    )
+
+    fig.suptitle(
+        "Figure 9. Leave One Battery Out actual versus predicted SOH, seed 42",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
-    save(fig, "fig13_learning_curves.png")
+    save(fig, "fig09_loo_actual_vs_predicted.png")
 
 
-def fig14_ablation(full):
-    # Build ablation mean values from final_results_raw.csv
-    configs = ["GRU", "LSTM", "XGB", "Weighted", "Stack_LR", "Stack_Ridge", "Stack_EN"]
-    labels  = ["GRU", "LSTM", "XGBoost", "Weighted\nEns.", "Stack\n(LR)", "Stack\n(Ridge)", "Stack\n(EN)★"]
-    colors  = [MODEL_COLORS.get(c, "#888888") for c in configs]
+def figure_10_within_vs_loo(full, loo_overall, loo_summary):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
 
-    vals_per_bid = {bid: [] for bid in CELLS}
+    wb_values = []
+    loo_values = []
+
+    for model in MODS_LOO:
+        wb_col = f"{model}_RMSE"
+
+        if wb_col in full.columns:
+            wb_values.append(float(full[wb_col].mean()))
+        else:
+            wb_values.append(np.nan)
+
+        row = loo_overall[loo_overall.Model == model]
+        loo_values.append(
+            float(row.RMSE_mean.iloc[0]) if len(row) else np.nan
+        )
+
+    x = np.arange(len(MODS_LOO))
+    width = 0.36
+
+    axes[0].bar(
+        x - width / 2,
+        wb_values,
+        width,
+        label="Within battery",
+        color=[MODEL_COLORS[m] for m in MODS_LOO],
+        alpha=0.86
+    )
+    axes[0].bar(
+        x + width / 2,
+        loo_values,
+        width,
+        label="Leave One Battery Out",
+        color=[MODEL_COLORS[m] for m in MODS_LOO],
+        alpha=0.42,
+        hatch="////",
+        edgecolor="grey"
+    )
+
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(
+        ["GRU", "LSTM", "XGBoost", "Weighted", "Stack Ridge", "Stack EN"],
+        fontsize=8.8
+    )
+    axes[0].set_ylabel("Mean RMSE, SOH percentage points")
+    axes[0].set_title(
+        "Model level comparison",
+        fontweight="bold"
+    )
+    axes[0].legend(fontsize=8.6)
+
+    within_per = full.groupby("Battery")["Stack_EN_RMSE"].mean()
+
+    loo_per = {}
     for bid in CELLS:
-        sub = full[full.Battery == bid]
-        for cfg in configs:
-            col = f"{cfg}_RMSE"
-            vals_per_bid[bid].append(float(sub[col].mean()) if col in sub.columns else 0.0)
+        row = loo_summary[
+            (loo_summary.Test_Battery == bid) &
+            (loo_summary.Model == "Stack_EN")
+        ]
+        loo_per[bid] = float(row.RMSE_mean.iloc[0]) if len(row) else np.nan
 
-    x = np.arange(len(configs)); w = 0.19
-    fig, ax = plt.subplots(figsize=(13, 5.5))
-    for i, (bid, clr) in enumerate(PALETTE.items()):
-        ax.bar(x + i*w, vals_per_bid[bid], w, label=bid, color=clr, alpha=.85)
-    ax.set_xticks(x + 1.5*w)
-    ax.set_xticklabels(labels, fontsize=9.5)
-    ax.set_ylabel("RMSE (SOH %)")
-    ax.set_title("Fig. 14 — Ablation Study: Per-Cell RMSE Across All Configurations\n"
-                 "(mean, 3 seeds; ★ = Proposed final method)", fontweight="bold")
-    ax.legend(ncol=4, fontsize=9, loc="upper right", framealpha=.85)
-    ax.axvspan(5.7, 7.3, alpha=.06, color="gold", zorder=0)
+    x2 = np.arange(len(CELLS))
+
+    axes[1].bar(
+        x2 - width / 2,
+        [within_per[b] for b in CELLS],
+        width,
+        color=[PALETTE[b] for b in CELLS],
+        alpha=0.86,
+        label="Within battery"
+    )
+    axes[1].bar(
+        x2 + width / 2,
+        [loo_per[b] for b in CELLS],
+        width,
+        color=[PALETTE[b] for b in CELLS],
+        alpha=0.42,
+        hatch="////",
+        edgecolor="grey",
+        label="LOO"
+    )
+
+    axes[1].set_xticks(x2)
+    axes[1].set_xticklabels(CELLS)
+    axes[1].set_ylabel("RMSE, SOH percentage points")
+    axes[1].set_title(
+        "Stack ElasticNet by held out battery",
+        fontweight="bold"
+    )
+    axes[1].legend(fontsize=8.6)
+
+    fig.suptitle(
+        "Figure 10. Within battery versus Leave One Battery Out performance",
+        fontsize=12, fontweight="bold"
+    )
     plt.tight_layout()
-    save(fig, "fig14_ablation.png")
+    save(fig, "fig10_within_vs_loo.png")
+
+
+def figure_11_b0006(loo_raw, loo_preds, rich):
+    fig = plt.figure(figsize=(12, 8))
+    gs = gridspec.GridSpec(
+        2, 2,
+        figure=fig,
+        height_ratios=[1.15, 1],
+        hspace=0.42,
+        wspace=0.34
+    )
+
+    p = loo_preds["B0006"]
+    df = rich["B0006"]
+
+    ax0 = fig.add_subplot(gs[0, :])
+
+    ax0.plot(
+        df.Cycle,
+        df.SOH,
+        color="lightgrey",
+        lw=1.0,
+        label="Full SOH trajectory"
+    )
+    ax0.plot(
+        p.Cycle,
+        p.Actual_SOH,
+        color="#d6604d",
+        lw=2.4,
+        label="Actual LOO test SOH"
+    )
+    ax0.plot(
+        p.Cycle,
+        p.Stack_EN,
+        color="#bf5b17",
+        lw=2.2,
+        label="Stack ElasticNet"
+    )
+    ax0.plot(
+        p.Cycle,
+        p.GRU,
+        "--",
+        color="#2166ac",
+        lw=1.3,
+        label="GRU"
+    )
+    ax0.plot(
+        p.Cycle,
+        p.LSTM,
+        "--",
+        color="#4dac26",
+        lw=1.3,
+        label="LSTM"
+    )
+
+    ax0.set_xlabel("Discharge cycle")
+    ax0.set_ylabel("SOH (%)")
+    ax0.set_title(
+        "B0006 LOO, seed 42, training cells: B0005, B0007, B0018",
+        fontweight="bold"
+    )
+    ax0.legend(fontsize=8.0, ncol=3, framealpha=0.88)
+    add_panel_label(ax0, "a")
+
+    ax1 = fig.add_subplot(gs[1, 0])
+    sub = loo_raw[loo_raw.Test_Battery == "B0006"].copy()
+
+    ax1.bar(
+        sub.Seed.astype(str),
+        sub.Stack_EN_RMSE,
+        color="#d6604d",
+        alpha=0.85,
+        edgecolor="white"
+    )
+
+    mean_rmse = float(sub.Stack_EN_RMSE.mean())
+    std_rmse = float(sub.Stack_EN_RMSE.std(ddof=1))
+
+    ax1.axhline(
+        mean_rmse,
+        color="black",
+        lw=1.5,
+        ls="--",
+        label=f"Three seed mean = {mean_rmse:.3f}"
+    )
+
+    ax1.text(
+        0.03, 0.92,
+        f"Bars: Stack ElasticNet RMSE\n"
+        f"SD = {std_rmse:.3f}",
+        transform=ax1.transAxes,
+        va="top",
+        fontsize=8,
+        bbox=dict(facecolor="white", alpha=0.88, edgecolor="none")
+    )
+
+    ax1.set_xlabel("Evaluation seed")
+    ax1.set_ylabel("RMSE, SOH %")
+    ax1.set_title(
+        "B0006 LOO seed stability",
+        fontweight="bold"
+    )
+    ax1.legend(fontsize=8)
+    add_panel_label(ax1, "b")
+
+    ax2 = fig.add_subplot(gs[1, 1])
+    residual = p.Stack_EN.values - p.Actual_SOH.values
+
+    ax2.scatter(
+        p.Actual_SOH,
+        residual,
+        color="#d6604d",
+        s=35,
+        alpha=0.78
+    )
+    ax2.axhline(
+        0,
+        color="black",
+        lw=1.2,
+        ls="--",
+        label="Zero residual"
+    )
+
+    ax2.set_xlabel("Actual SOH (%)")
+    ax2.set_ylabel("Residual, predicted minus actual SOH (%)")
+    ax2.set_title(
+        "B0006 residual versus actual SOH",
+        fontweight="bold"
+    )
+    ax2.legend(fontsize=8)
+    add_panel_label(ax2, "c")
+
+    fig.suptitle(
+        "Figure 11. B0006 Leave One Battery Out diagnostic",
+        fontsize=12, fontweight="bold"
+    )
+    plt.tight_layout()
+    save(fig, "fig11_b0006_loo_diagnostic.png")
+
+
+def figure_12_b0018(loo_raw, loo_preds, rich):
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.8))
+
+    p = loo_preds["B0018"]
+    df = rich["B0018"]
+
+    axes[0].plot(
+        df.Cycle,
+        df.SOH,
+        color="lightgrey",
+        lw=1.0,
+        label="Full SOH trajectory"
+    )
+    axes[0].plot(
+        p.Cycle,
+        p.Actual_SOH,
+        color="#7b2d8b",
+        lw=2.4,
+        label="Actual LOO test SOH"
+    )
+    axes[0].plot(
+        p.Cycle,
+        p.Stack_EN,
+        color="#bf5b17",
+        lw=2.2,
+        label="Stack ElasticNet"
+    )
+    axes[0].plot(
+        p.Cycle,
+        p.GRU,
+        "--",
+        color="#2166ac",
+        lw=1.3,
+        label="GRU"
+    )
+    axes[0].plot(
+        p.Cycle,
+        p.LSTM,
+        "--",
+        color="#4dac26",
+        lw=1.3,
+        label="LSTM"
+    )
+
+    axes[0].set_xlabel("Discharge cycle")
+    axes[0].set_ylabel("SOH (%)")
+    axes[0].set_title(
+        "B0018 LOO, seed 42, training cells: B0005, B0006, B0007",
+        fontweight="bold"
+    )
+    axes[0].legend(fontsize=7.8, framealpha=0.88)
+    add_panel_label(axes[0], "a")
+
+    sub = loo_raw[loo_raw.Test_Battery == "B0018"].copy()
+
+    axes[1].bar(
+        sub.Seed.astype(str),
+        sub.Stack_EN_RMSE,
+        color="#7b2d8b",
+        alpha=0.85,
+        edgecolor="white"
+    )
+
+    mean_rmse = float(sub.Stack_EN_RMSE.mean())
+    std_rmse = float(sub.Stack_EN_RMSE.std(ddof=1))
+
+    axes[1].axhline(
+        mean_rmse,
+        color="black",
+        lw=1.5,
+        ls="--",
+        label=f"Three seed mean = {mean_rmse:.3f}"
+    )
+
+    axes[1].text(
+        0.03, 0.92,
+        f"Bars: Stack ElasticNet RMSE\n"
+        f"SD = {std_rmse:.3f}",
+        transform=axes[1].transAxes,
+        va="top",
+        fontsize=8,
+        bbox=dict(facecolor="white", alpha=0.88, edgecolor="none")
+    )
+
+    axes[1].set_xlabel("Evaluation seed")
+    axes[1].set_ylabel("RMSE, SOH %")
+    axes[1].set_title(
+        "B0018 LOO seed stability",
+        fontweight="bold"
+    )
+    axes[1].legend(fontsize=8)
+    add_panel_label(axes[1], "b")
+
+    fig.suptitle(
+        "Figure 12. B0018 Leave One Battery Out diagnostic",
+        fontsize=12, fontweight="bold"
+    )
+    plt.tight_layout()
+    save(fig, "fig12_b0018_loo_diagnostic.png")
+
+
+def figure_13_ablation(full):
+    configurations = [
+        "GRU",
+        "LSTM",
+        "XGB",
+        "Weighted",
+        "Stack_LR",
+        "Stack_Ridge",
+        "Stack_EN",
+    ]
+
+    labels = [
+        "GRU",
+        "LSTM",
+        "XGBoost",
+        "Weighted\nensemble",
+        "Stack\nLR",
+        "Stack\nRidge",
+        "Stack\nElasticNet",
+    ]
+
+    x = np.arange(len(configurations))
+    width = 0.19
+
+    fig, ax = plt.subplots(figsize=(13, 5.7))
+
+    for index, bid in enumerate(CELLS):
+        values = []
+
+        for configuration in configurations:
+            column = f"{configuration}_RMSE"
+
+            if column not in full.columns:
+                values.append(np.nan)
+            else:
+                values.append(
+                    float(
+                        full.loc[
+                            full.Battery == bid,
+                            column
+                        ].mean()
+                    )
+                )
+
+        ax.bar(
+            x + index * width,
+            values,
+            width,
+            label=bid,
+            color=PALETTE[bid],
+            alpha=0.85
+        )
+
+    ax.set_xticks(x + 1.5 * width)
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylabel("RMSE, SOH percentage points")
+    ax.set_xlabel("Model or ensemble configuration")
+
+    ax.set_title(
+        "Figure 13. Ablation comparison across model and fusion configurations",
+        fontweight="bold"
+    )
+
+    ax.legend(
+        ncol=4,
+        fontsize=8.8,
+        loc="upper right",
+        framealpha=0.88
+    )
+
+    plt.tight_layout()
+    save(fig, "fig13_ablation.png")
 
 
 def main():
-    print("=" * 60)
-    print("  Generating publication figures …")
-    print("=" * 60)
+    print("=" * 70)
+    print("Generating complete manuscript figure set")
+    print("=" * 70)
 
-    # Check results exist
-    if not (RESULTS_DIR / "final_results_raw.csv").exists():
-        raise FileNotFoundError(
-            "final_results_raw.csv not found.\n"
-            "Run experiments/run_all_experiments.py first."
-        )
+    full, overall, summary, preds, rich = load_all()
 
-    full, ovrl, smry, preds, rich = load_data()
+    figure_1(rich)
+    figure_2_workflow()
+    figure_3_actual_vs_predicted(preds)
+    figure_4_heatmap(summary)
+    figure_5_multiseed(full)
+    figure_6_residual_bars(preds)
+    figure_7_residual_hist(preds)
+    figure_8_learning_curves()
 
-    fig01_degradation(rich)
-    fig02_feature_profiles(rich)
-    fig03_b0006_diagnostic(rich)
-    fig04_actual_vs_predicted(preds)
-    fig05_scatter(preds)
-    fig06_residuals(preds)
-    fig07_per_cell_rmse(full, smry)
-    fig08_overall_comparison(ovrl)
-    fig09_rmse_heatmap(smry)
-    fig10_multiseed(full)
-    fig11_b0018_diagnostic(full, preds, smry)
-    fig12_residual_histograms(preds)
-    fig13_learning_curves()
-    fig14_ablation(full)
+    loo_raw, loo_summary, loo_overall, loo_preds = load_loo()
 
-    print(f"\n  All 14 figures saved to: {FIGURES_DIR}")
+    figure_9_loo_predictions(loo_preds, rich)
+    figure_10_within_vs_loo(full, loo_overall, loo_summary)
+    figure_11_b0006(loo_raw, loo_preds, rich)
+    figure_12_b0018(loo_raw, loo_preds, rich)
+    figure_13_ablation(full)
+
+    print("=" * 70)
+    print(f"All 13 manuscript figures saved to: {FIGURES_DIR}")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
